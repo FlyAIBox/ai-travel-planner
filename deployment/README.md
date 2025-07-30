@@ -85,7 +85,7 @@ vim .env.prod
 
 ```bash
 # 生产环境
-./scripts/deployment/deploy.sh
+./deployment/scripts/deployment/deploy.sh
 ```
 
 ### 方式二：手动Docker Compose
@@ -177,16 +177,16 @@ python scripts/database/init_db.py reset --force
 
 ```bash
 # 完整部署
-./scripts/deployment/deploy.sh
+./deployment/scripts/deployment/deploy.sh
 
 # 仅构建镜像
-./scripts/deployment/deploy.sh --build-only
+./deployment/scripts/deployment/deploy.sh --build-only
 
 # 停止所有服务
-./scripts/deployment/deploy.sh --stop
+./deployment/scripts/deployment/deploy.sh --stop
 
 # 查看服务日志
-./scripts/deployment/deploy.sh --logs
+./deployment/scripts/deployment/deploy.sh --logs
 ```
 
 ## 🔍 故障排除

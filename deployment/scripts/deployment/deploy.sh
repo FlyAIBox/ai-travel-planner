@@ -1,7 +1,8 @@
+
 #!/bin/bash
 
-# ==================== 生产环境部署脚本 ====================
-# AI Travel Planner - 生产环境一键部署
+# ==================== 部署脚本 ====================
+# AI Travel Planner - 一键部署
 
 set -e  # 遇到错误立即退出
 
@@ -45,8 +46,14 @@ check_requirements() {
         exit 1
     fi
     
-    # 检查Docker Compose
-    if ! command -v docker-compose &> /dev/null; then
+    # 检查Docker Compose (优先使用新版本)
+    if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        log_info "使用 Docker Compose v2"
+        DOCKER_COMPOSE_CMD="docker compose"
+    elif command -v docker-compose &> /dev/null; then
+        log_info "使用 Docker Compose v1"
+        DOCKER_COMPOSE_CMD="docker-compose"
+    else
         log_error "Docker Compose 未安装，请先安装 Docker Compose"
         exit 1
     fi
@@ -58,6 +65,32 @@ check_requirements() {
     fi
     
     log_success "系统要求检查通过"
+}
+
+# 加载环境变量
+load_environment() {
+    log_step "加载环境变量..."
+
+    # 检查 .env 文件是否存在
+    if [[ -f ".env" ]]; then
+        log_info "发现 .env 文件，正在加载环境变量..."
+        # 打印 .env 文件的绝对路径，便于用户确认加载的环境文件位置
+        echo "加载的 .env 文件路径: $(realpath .env)"
+        # 安全地导出 .env 文件中的环境变量（忽略注释和空行）
+        while IFS= read -r line; do
+            # 跳过空行和注释行
+            if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
+                # 检查是否是有效的环境变量格式 (KEY=VALUE)
+                if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+                    export "$line"
+                    # echo "export $line"
+                fi
+            fi
+        done < .env
+        log_success "环境变量加载完成"
+    else
+        log_warning "未找到 .env 文件，请确保环境变量已通过其他方式设置"
+    fi
 }
 
 # 环境变量检查
@@ -114,8 +147,8 @@ create_directories() {
 stop_existing() {
     log_step "停止现有容器..."
     
-    if docker-compose -f deployment/docker/docker-compose.yml ps -q | grep -q .; then
-        docker-compose -f deployment/docker/docker-compose.yml down
+    if $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml ps -q | grep -q .; then
+        $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml down
         log_info "已停止现有容器"
     else
         log_info "没有运行中的容器"
@@ -126,7 +159,7 @@ stop_existing() {
 pull_images() {
     log_step "拉取最新镜像..."
     
-    docker-compose -f deployment/docker/docker-compose.yml pull
+    $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml pull
     
     log_success "镜像拉取完成"
 }
@@ -135,7 +168,7 @@ pull_images() {
 build_images() {
     log_step "构建应用镜像..."
     
-    docker-compose -f deployment/docker/docker-compose.yml build --no-cache
+    $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml build --no-cache
     
     log_success "应用镜像构建完成"
 }
@@ -145,7 +178,7 @@ start_databases() {
     log_step "启动数据库服务..."
     
     # 先启动数据库服务
-    docker-compose -f deployment/docker/docker-compose.yml up -d \
+    $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml up -d \
         mysql-prod redis-prod qdrant-prod elasticsearch-prod
     
     log_info "等待数据库服务就绪..."
@@ -155,7 +188,7 @@ start_databases() {
     local attempt=1
     
     while [[ $attempt -le $max_attempts ]]; do
-        if docker-compose -f deployment/docker/docker-compose.yml exec -T mysql-prod mysqladmin ping -h localhost --silent; then
+        if $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml exec -T mysql-prod mysqladmin ping -h localhost --silent; then
             log_success "MySQL 服务就绪"
             break
         fi
@@ -173,7 +206,7 @@ start_databases() {
     # 等待Redis就绪
     attempt=1
     while [[ $attempt -le $max_attempts ]]; do
-        if docker-compose -f deployment/docker/docker-compose.yml exec -T redis-prod redis-cli ping | grep -q PONG; then
+        if $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml exec -T redis-prod redis-cli ping | grep -q PONG; then
             log_success "Redis 服务就绪"
             break
         fi
@@ -196,7 +229,7 @@ init_database() {
     log_step "初始化数据库..."
     
     # 运行数据库迁移
-    docker-compose -f deployment/docker/docker-compose.yml run --rm api-gateway-prod \
+    $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml run --rm api-gateway-prod \
         python scripts/database/init_db.py init
     
     log_success "数据库初始化完成"
@@ -207,7 +240,7 @@ start_applications() {
     log_step "启动应用服务..."
     
     # 启动核心应用服务
-    docker-compose -f deployment/docker/docker-compose.yml up -d \
+    $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml up -d \
         api-gateway-prod chat-service-prod agent-service-prod \
         rag-service-prod user-service-prod
     
@@ -221,7 +254,7 @@ start_applications() {
         local service_name=$(echo $service | cut -d: -f1)
         local port=$(echo $service | cut -d: -f2)
         
-        if docker-compose -f deployment/docker/docker-compose.yml exec -T $service_name curl -f http://localhost:$port/health &> /dev/null; then
+        if $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml exec -T $service_name curl -f http://localhost:$port/health &> /dev/null; then
             log_success "$service_name 服务健康"
         else
             log_warning "$service_name 服务可能未就绪"
@@ -235,7 +268,7 @@ start_applications() {
 start_workflow_monitoring() {
     log_step "启动工作流和监控服务..."
     
-    docker-compose -f deployment/docker/docker-compose.yml up -d \
+    $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml up -d \
         n8n-prod prometheus-prod grafana-prod filebeat-prod
     
     log_success "工作流和监控服务启动完成"
@@ -245,7 +278,7 @@ start_workflow_monitoring() {
 start_loadbalancer() {
     log_step "启动负载均衡..."
     
-    docker-compose -f deployment/docker/docker-compose.yml up -d nginx-prod
+    $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml up -d nginx-prod
     
     log_success "负载均衡启动完成"
 }
@@ -279,7 +312,7 @@ show_deployment_info() {
     log_step "部署信息"
     
     echo -e "${CYAN}==================== 部署完成 ====================${NC}"
-    echo -e "${GREEN}🎉 AI Travel Planner 生产环境部署成功！${NC}"
+    echo -e "${GREEN}🎉 AI Travel Planner 部署成功！${NC}"
     echo ""
     echo -e "${YELLOW}服务访问地址:${NC}"
     echo -e "  🌐 主入口:          http://localhost"
@@ -314,7 +347,7 @@ show_deployment_info() {
 # 主函数
 main() {
     echo -e "${CYAN}==================== AI Travel Planner ====================${NC}"
-    echo -e "${GREEN}🚀 开始生产环境部署${NC}"
+    echo -e "${GREEN}🚀 开始部署${NC}"
     echo ""
     
     # 检查参数
@@ -335,7 +368,7 @@ main() {
                 ;;
             --logs)
                 log_info "查看服务日志"
-                docker-compose -f deployment/docker/docker-compose.yml logs -f
+                $DOCKER_COMPOSE_CMD -f deployment/docker/docker-compose.yml logs -f
                 exit 0
                 ;;
             --help|-h)
@@ -357,6 +390,7 @@ main() {
     
     # 执行部署步骤
     check_requirements
+    load_environment
     check_environment
     create_directories
     stop_existing
