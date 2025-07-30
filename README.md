@@ -61,7 +61,6 @@
 - **vLLM**: 高性能大模型推理引擎
 - **Qwen2.5-7B-Instruct**: 主要对话模型
 - **sentence-transformers**: 文本向量化
-- **Qdrant**: 向量数据库
 
 ### 数据存储
 - **MySQL**: 主数据库（用户数据、旅行计划）
@@ -159,45 +158,21 @@ docker-compose -f docker-compose.prod.yml up -d
 - [API文档](docs/api.md)
 - [部署指南](docs/deployment.md)
 
-## 🧪 测试
-
-```bash
-# 运行所有测试
-pytest
-
-# 运行特定测试
-pytest tests/unit/
-pytest tests/integration/
-pytest tests/e2e/
-
-# 生成覆盖率报告
-pytest --cov=src --cov-report=html
-```
-
-## 🤝 贡献指南
-
-1. Fork 项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-## 📞 联系我们
-
-- 项目维护者: [Your Name]
-- Email: [your.email@example.com]
-- 项目地址: [GitHub Repository]
-
-## 🔄 版本历史
-
-- v1.0.0 - 初始版本，基础功能实现
-- v0.9.0 - Beta版本，核心功能开发完成
-- v0.1.0 - Alpha版本，项目启动
-
 ---
 
-⭐ 如果这个项目对你有帮助，请给它一个星标！
+<div align="center">
+
+**⭐ 如果这个项目对您有帮助，请给个Star支持！⭐**
+
+<a href="https://star-history.com/#FlyAIBox/ai-travel-planner&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=FlyAIBox/ai-travel-planner&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=FlyAIBox/ai-travel-planner&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=FlyAIBox/ai-travel-planner&type=Date" />
+  </picture>
+</a>
+
+**🔗 更多访问：[大模型实战101](https://mp.weixin.qq.com/mp/appmsgalbum?__biz=MzkzODUxMTY1Mg==&action=getalbum&album_id=3945699220593803270#wechat_redirect)**
+
+</div>
+
