@@ -19,11 +19,9 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # 复制依赖文件
 COPY requirements.txt .
-COPY services/api-gateway/requirements.txt ./service-requirements.txt
 
 # 安装Python依赖
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir -r service-requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # ==================== 运行阶段 ====================
 FROM python:3.10-slim as runtime
