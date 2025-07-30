@@ -114,8 +114,8 @@ create_directories() {
 stop_existing() {
     log_step "停止现有容器..."
     
-    if docker-compose -f deployment/docker/docker-compose.prod.yml ps -q | grep -q .; then
-        docker-compose -f deployment/docker/docker-compose.prod.yml down
+    if docker-compose -f deployment/docker/docker-compose.yml ps -q | grep -q .; then
+        docker-compose -f deployment/docker/docker-compose.yml down
         log_info "已停止现有容器"
     else
         log_info "没有运行中的容器"
@@ -126,7 +126,7 @@ stop_existing() {
 pull_images() {
     log_step "拉取最新镜像..."
     
-    docker-compose -f deployment/docker/docker-compose.prod.yml pull
+    docker-compose -f deployment/docker/docker-compose.yml pull
     
     log_success "镜像拉取完成"
 }
@@ -135,7 +135,7 @@ pull_images() {
 build_images() {
     log_step "构建应用镜像..."
     
-    docker-compose -f deployment/docker/docker-compose.prod.yml build --no-cache
+    docker-compose -f deployment/docker/docker-compose.yml build --no-cache
     
     log_success "应用镜像构建完成"
 }
@@ -145,7 +145,7 @@ start_databases() {
     log_step "启动数据库服务..."
     
     # 先启动数据库服务
-    docker-compose -f deployment/docker/docker-compose.prod.yml up -d \
+    docker-compose -f deployment/docker/docker-compose.yml up -d \
         mysql-prod redis-prod qdrant-prod elasticsearch-prod
     
     log_info "等待数据库服务就绪..."
@@ -155,7 +155,7 @@ start_databases() {
     local attempt=1
     
     while [[ $attempt -le $max_attempts ]]; do
-        if docker-compose -f deployment/docker/docker-compose.prod.yml exec -T mysql-prod mysqladmin ping -h localhost --silent; then
+        if docker-compose -f deployment/docker/docker-compose.yml exec -T mysql-prod mysqladmin ping -h localhost --silent; then
             log_success "MySQL 服务就绪"
             break
         fi
@@ -173,7 +173,7 @@ start_databases() {
     # 等待Redis就绪
     attempt=1
     while [[ $attempt -le $max_attempts ]]; do
-        if docker-compose -f deployment/docker/docker-compose.prod.yml exec -T redis-prod redis-cli ping | grep -q PONG; then
+        if docker-compose -f deployment/docker/docker-compose.yml exec -T redis-prod redis-cli ping | grep -q PONG; then
             log_success "Redis 服务就绪"
             break
         fi
@@ -196,7 +196,7 @@ init_database() {
     log_step "初始化数据库..."
     
     # 运行数据库迁移
-    docker-compose -f deployment/docker/docker-compose.prod.yml run --rm api-gateway-prod \
+    docker-compose -f deployment/docker/docker-compose.yml run --rm api-gateway-prod \
         python scripts/database/init_db.py init
     
     log_success "数据库初始化完成"
@@ -207,7 +207,7 @@ start_applications() {
     log_step "启动应用服务..."
     
     # 启动核心应用服务
-    docker-compose -f deployment/docker/docker-compose.prod.yml up -d \
+    docker-compose -f deployment/docker/docker-compose.yml up -d \
         api-gateway-prod chat-service-prod agent-service-prod \
         rag-service-prod user-service-prod
     
@@ -221,7 +221,7 @@ start_applications() {
         local service_name=$(echo $service | cut -d: -f1)
         local port=$(echo $service | cut -d: -f2)
         
-        if docker-compose -f deployment/docker/docker-compose.prod.yml exec -T $service_name curl -f http://localhost:$port/health &> /dev/null; then
+        if docker-compose -f deployment/docker/docker-compose.yml exec -T $service_name curl -f http://localhost:$port/health &> /dev/null; then
             log_success "$service_name 服务健康"
         else
             log_warning "$service_name 服务可能未就绪"
@@ -235,7 +235,7 @@ start_applications() {
 start_workflow_monitoring() {
     log_step "启动工作流和监控服务..."
     
-    docker-compose -f deployment/docker/docker-compose.prod.yml up -d \
+    docker-compose -f deployment/docker/docker-compose.yml up -d \
         n8n-prod prometheus-prod grafana-prod filebeat-prod
     
     log_success "工作流和监控服务启动完成"
@@ -245,7 +245,7 @@ start_workflow_monitoring() {
 start_loadbalancer() {
     log_step "启动负载均衡..."
     
-    docker-compose -f deployment/docker/docker-compose.prod.yml up -d nginx-prod
+    docker-compose -f deployment/docker/docker-compose.yml up -d nginx-prod
     
     log_success "负载均衡启动完成"
 }
@@ -335,7 +335,7 @@ main() {
                 ;;
             --logs)
                 log_info "查看服务日志"
-                docker-compose -f deployment/docker/docker-compose.prod.yml logs -f
+                docker-compose -f deployment/docker/docker-compose.yml logs -f
                 exit 0
                 ;;
             --help|-h)

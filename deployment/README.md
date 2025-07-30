@@ -20,12 +20,7 @@
 │   ├── Qdrant (6333) - 向量数据库
 │   └── Elasticsearch (9200) - 搜索引擎
 ├── 工作流层
-│   └── n8n (5678) - 工作流引擎
-└── 监控层
-    ├── Prometheus (9090) - 指标收集
-    ├── Grafana (3000) - 可视化面板
-    ├── Jaeger (16686) - 分布式追踪
-    └── Kibana (5601) - 日志分析
+    └── n8n (5678) - 工作流引擎
 ```
 
 ## 🚀 快速开始
@@ -89,14 +84,8 @@ vim .env.prod
 ### 方式一：使用管理脚本（推荐）
 
 ```bash
-# 开发环境
-./scripts/docker/manage.sh dev up --build
-
 # 生产环境
 ./scripts/deployment/deploy.sh
-
-# 监控服务
-./scripts/docker/manage.sh monitor up
 ```
 
 ### 方式二：手动Docker Compose
@@ -114,28 +103,6 @@ docker-compose -f deployment/docker/docker-compose.monitoring.yml up -d
 
 ## 📝 环境说明
 
-### 🔧 开发环境 (Dev)
-
-**特点**:
-- 代码热重载
-- 详细调试日志
-- 开发工具集成
-- SQLite数据库（可选）
-
-**服务列表**:
-- MySQL开发数据库
-- Redis缓存
-- Qdrant向量数据库
-- API网关 + 各微服务
-- Jupyter Lab (开发工具)
-- n8n工作流设计器
-
-**访问地址**:
-- 🌐 主应用: http://localhost:8000
-- 📓 Jupyter: http://localhost:8888
-- 🔧 n8n: http://localhost:5678
-
-### 🏭 生产环境 (Prod)
 
 **特点**:
 - 多进程worker
@@ -160,23 +127,8 @@ docker-compose -f deployment/docker/docker-compose.monitoring.yml up -d
 - 🤖 智能体: http://localhost/agent
 - 📚 RAG服务: http://localhost/rag
 - 👤 用户服务: http://localhost/users
-
-### 📊 监控环境 (Monitor)
-
-**服务列表**:
-- Prometheus (指标收集)
-- Grafana (可视化)
-- Alertmanager (告警)
-- Jaeger (分布式追踪)
-- Kibana (日志分析)
-- 各种Exporter
-
-**访问地址**:
-- 📈 Prometheus: http://localhost:9090
-- 📊 Grafana: http://localhost:3000
-- 🚨 Alertmanager: http://localhost:9093
-- 🔍 Jaeger: http://localhost:16686
-- 📋 Kibana: http://localhost:5601
+- 🔧 工作流管理: http://localhost/workflow
+- 📊 监控面板: http://localhost/grafana
 
 ## 🔧 管理命令
 
@@ -364,17 +316,3 @@ docker exec -i ai-travel-mysql-prod mysql -u root -p ai_travel_planner < backup.
 # Redis恢复
 docker exec -i ai-travel-redis-prod redis-cli --pipe < backup.rdb
 ```
-
-## 📞 技术支持
-
-- **文档**: [项目文档](../docs/)
-- **问题反馈**: [GitHub Issues](https://github.com/your-org/ai-travel-planner/issues)
-- **邮件支持**: support@ai-travel-planner.com
-
-## 📋 更新历志
-
-- **v1.0.0** - 初始版本
-  - 完整的微服务架构
-  - Docker容器化部署
-  - 监控和日志系统
-  - 自动化部署脚本 
