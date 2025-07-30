@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     
     # vLLM配置
     VLLM_URL: str = Field(default="http://localhost:8001", description="vLLM服务URL")
-    VLLM_MODEL: str = Field(default="Qwen/Qwen2.5-7B-Instruct", description="vLLM模型")
+    VLLM_MODEL: str = Field(default="Qwen/Qwen3-32B", description="vLLM模型")
     VLLM_MAX_TOKENS: int = Field(default=4096, description="vLLM最大令牌数")
     VLLM_TEMPERATURE: float = Field(default=0.7, description="vLLM温度")
     VLLM_TOP_P: float = Field(default=0.95, description="vLLM Top-P")

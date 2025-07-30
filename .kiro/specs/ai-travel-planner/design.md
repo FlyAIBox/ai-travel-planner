@@ -1754,7 +1754,7 @@ services:
       - models_data:/models
       - /dev/shm:/dev/shm
     command: >
-      --model /models/Qwen/Qwen2.5-7B-Instruct
+      --model /models/Qwen/Qwen3-32B
       --tensor-parallel-size 2
       --max-model-len 4096
       --gpu-memory-utilization 0.8
