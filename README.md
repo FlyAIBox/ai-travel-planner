@@ -114,7 +114,9 @@ ai-travel-planner/
 - NVIDIA GPU (推荐，用于AI推理)
 - 16GB+ RAM
 
-### 安装步骤
+### 一键启动系统
+
+#### 🎯 推荐方法：使用启动脚本
 
 1. **克隆项目**
 ```bash
@@ -122,33 +124,73 @@ git clone https://github.com/FlyAIBox/ai-travel-planner.git
 cd ai-travel-planner
 ```
 
-2. **设置Python环境**
+2. **一键启动**
 ```bash
-# 使用Conda管理环境
-conda create -n ai-travel-planner python=3.10 -y
-conda activate ai-travel-planner
-pip install -r requirements.txt
+# 自动化启动整个系统（推荐）
+./scripts/start_system.sh
+
+# 查看系统状态
+./scripts/start_system.sh status
+
+# 查看实时日志
+./scripts/start_system.sh logs
+
+# 停止系统
+./scripts/start_system.sh stop
 ```
 
-3. **配置环境变量**
+#### 🔧 手动启动方法
+
+1. **初始化系统**
 ```bash
-cp .env.example .env
-# 编辑.env文件，配置数据库、API密钥等
+# 启动基础服务
+docker-compose -f deployment/docker/docker-compose.dev.yml up -d redis qdrant mysql
+
+# 等待服务启动完成（约30秒）
+sleep 30
+
+# 初始化系统（创建数据库、向量集合、构建知识库）
+python scripts/init_system.py
 ```
 
-4. **启动服务**
+2. **启动所有服务**
 ```bash
-# 开发环境
-docker-compose -f docker-compose.dev.yml up -d
+# 启动完整系统
+docker-compose -f deployment/docker/docker-compose.dev.yml up -d
 
-# 生产环境
-docker-compose -f docker-compose.prod.yml up -d
+# 查看服务状态
+docker-compose -f deployment/docker/docker-compose.dev.yml ps
 ```
 
-5. **访问应用**
-- Web界面: http://localhost:3000
-- API文档: http://localhost:8000/docs
-- n8n工作流: http://localhost:5678
+3. **验证系统**
+```bash
+# 检查各服务健康状态
+curl http://localhost:8000/api/v1/health  # Chat服务
+curl http://localhost:8001/api/v1/health  # RAG服务
+curl http://localhost:8002/api/v1/health  # 智能体服务
+curl http://localhost:8003/api/v1/health  # 用户服务
+curl http://localhost:8080/gateway/health # API网关
+
+# 检查MCP工具列表
+curl http://localhost:8000/api/v1/mcp/tools
+
+# 测试聊天API
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"content": "我想去北京旅游", "user_id": "test_user"}'
+```
+
+### 服务端点
+
+- **Chat服务**: http://localhost:8000
+  - API文档: http://localhost:8000/docs
+  - WebSocket: ws://localhost:8000/ws/{user_id}
+- **向量数据库**: http://localhost:6333
+- **Redis缓存**: localhost:6379
+- **MySQL数据库**: localhost:3306
+- **n8n工作流**: http://localhost:5678 (admin/ai_travel_n8n)
+- **Prometheus监控**: http://localhost:9090
+- **Grafana仪表板**: http://localhost:3000 (admin/ai_travel_grafana)
 
 ## 📚 文档
 

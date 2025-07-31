@@ -1,0 +1,281 @@
+version: '3.8'
+
+services:
+  # Redis缓存和会话存储
+  redis:
+    image: redis:7-alpine
+    container_name: ai-travel-redis-dev
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-ai_travel_redis}
+    volumes:
+      - redis_data:/data
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # Qdrant向量数据库
+  qdrant:
+    image: qdrant/qdrant:v1.14.1
+    container_name: ai-travel-qdrant-dev
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # MySQL数据库
+  mysql:
+    image: mysql:8.0
+    container_name: ai-travel-mysql-dev
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-ai_travel_root}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-ai_travel_db}
+      - MYSQL_USER=${MYSQL_USER:-ai_travel_user}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-ai_travel_pass}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+    command: --default-authentication-plugin=mysql_native_password
+
+  # Chat服务
+  chat-service:
+    build:
+      context: ../../
+      dockerfile: services/chat-service/Dockerfile
+    container_name: ai-travel-chat-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
+      - REDIS_DB=0
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION_NAME=travel_knowledge
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-ai_travel_db}
+      - MYSQL_USER=${MYSQL_USER:-ai_travel_user}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-ai_travel_pass}
+      - LOG_LEVEL=info
+    volumes:
+      - ../../services/chat-service:/app
+      - ../../shared:/app/shared
+      - ../../data:/app/data
+    depends_on:
+      - redis
+      - qdrant
+      - mysql
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # RAG服务
+  rag-service:
+    build:
+      context: ../../
+      dockerfile: services/rag-service/Dockerfile
+    container_name: ai-travel-rag-dev
+    ports:
+      - "8001:8001"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION_NAME=travel_knowledge
+      - EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+      - LOG_LEVEL=info
+    volumes:
+      - ../../services/rag-service:/app
+      - ../../shared:/app/shared
+      - ../../data:/app/data
+    depends_on:
+      - redis
+      - qdrant
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # 智能体服务
+  agent-service:
+    build:
+      context: ../../
+      dockerfile: services/agent-service/Dockerfile
+    container_name: ai-travel-agent-dev
+    ports:
+      - "8002:8002"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
+      - LOG_LEVEL=info
+    volumes:
+      - ../../services/agent-service:/app
+      - ../../shared:/app/shared
+    depends_on:
+      - redis
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # 用户服务
+  user-service:
+    build:
+      context: ../../
+      dockerfile: services/user-service/Dockerfile
+    container_name: ai-travel-user-dev
+    ports:
+      - "8003:8003"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-ai_travel_db}
+      - MYSQL_USER=${MYSQL_USER:-ai_travel_user}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-ai_travel_pass}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your_jwt_secret_key_here_please_change_in_production}
+      - LOG_LEVEL=info
+    volumes:
+      - ../../services/user-service:/app
+      - ../../shared:/app/shared
+    depends_on:
+      - redis
+      - mysql
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # API网关
+  api-gateway:
+    build:
+      context: ../../
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: ai-travel-gateway-dev
+    ports:
+      - "8080:8080"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - CHAT_SERVICE_URL=http://chat-service:8000
+      - RAG_SERVICE_URL=http://rag-service:8001
+      - AGENT_SERVICE_URL=http://agent-service:8002
+      - USER_SERVICE_URL=http://user-service:8003
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
+      - LOG_LEVEL=info
+    volumes:
+      - ../../services/api-gateway:/app
+      - ../../shared:/app/shared
+    depends_on:
+      - chat-service
+      - rag-service
+      - agent-service
+      - user-service
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # n8n工作流引擎
+  n8n:
+    image: n8nio/n8n:1.101.1
+    container_name: ai-travel-n8n-dev
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-ai_travel_n8n}
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=Asia/Shanghai
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ../../data/n8n:/data
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # Prometheus监控
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ai-travel-prometheus-dev
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # Grafana可视化
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ai-travel-grafana-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-ai_travel_grafana}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  mysql_data:
+    driver: local
+  n8n_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  ai-travel-network:
+    driver: bridge 
