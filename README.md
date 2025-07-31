@@ -164,13 +164,7 @@ docker-compose -f docker-compose.prod.yml up -d
 
 **⭐ 如果这个项目对您有帮助，请给个Star支持！⭐**
 
-<a href="https://star-history.com/#FlyAIBox/ai-travel-planner&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=FlyAIBox/ai-travel-planner&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=FlyAIBox/ai-travel-planner&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=FlyAIBox/ai-travel-planner&type=Date" />
-  </picture>
-</a>
+[![Star History Chart](https://api.star-history.com/svg?repos=FlyAIBox/ai-travel-planner&type=Date)](https://www.star-history.com/#FlyAIBox/ai-travel-planner&Date)
 
 **🔗 更多访问：[大模型实战101](https://mp.weixin.qq.com/mp/appmsgalbum?__biz=MzkzODUxMTY1Mg==&action=getalbum&album_id=3945699220593803270#wechat_redirect)**
 
