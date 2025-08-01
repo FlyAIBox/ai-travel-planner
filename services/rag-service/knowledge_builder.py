@@ -1,30 +1,34 @@
 """
 知识库构建系统
-实现文档向量化、预处理分块、ETL流水线、版本管理、增量更新、质量评估和自动筛选
+实现文档向量化、知识库构建、ETL流水线、质量评估和增量更新
 """
 
 import asyncio
 import json
 import hashlib
-import time
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union, Tuple, Iterator
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import uuid
-import re
 from urllib.parse import urlparse
 import mimetypes
 
 import aiofiles
 import aiohttp
 import numpy as np
-from bs4 import BeautifulSoup
-import pypdf
 from sentence_transformers import SentenceTransformer
-from langchain.text_splitter import RecursiveCharacterTextSplitter, CharacterTextSplitter
-from langchain.document_loaders import TextLoader, PyPDFLoader, WebBaseLoader
+from transformers import AutoTokenizer, AutoModel
+import torch
+import spacy
 import jieba
+from langchain.text_splitter import RecursiveCharacterTextSplitter, TokenTextSplitter
+from langchain.document_loaders import (
+    TextLoader, PyPDFLoader, UnstructuredHTMLLoader,
+    UnstructuredMarkdownLoader, JSONLoader
+)
+import tiktoken
 
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
@@ -37,27 +41,29 @@ settings = get_settings()
 @dataclass
 class DocumentMetadata:
     """文档元数据"""
-    source_id: str
-    source_type: str  # 'file', 'url', 'api', 'manual'
-    source_path: str
-    title: Optional[str] = None
+    document_id: str
+    title: str
+    source: str
+    document_type: str
+    language: str
     author: Optional[str] = None
-    language: str = 'zh'
-    category: str = 'general'
-    tags: List[str] = None
-    priority: int = 1  # 1-5, 5最高
-    created_at: datetime = None
-    updated_at: datetime = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
+    url: Optional[str] = None
+    file_path: Optional[str] = None
     file_size: Optional[int] = None
-    mime_type: Optional[str] = None
+    content_hash: Optional[str] = None
     
-    def __post_init__(self):
-        if self.tags is None:
-            self.tags = []
-        if self.created_at is None:
-            self.created_at = datetime.now()
-        if self.updated_at is None:
-            self.updated_at = self.created_at
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        data = asdict(self)
+        if self.created_at:
+            data['created_at'] = self.created_at.isoformat()
+        if self.updated_at:
+            data['updated_at'] = self.updated_at.isoformat()
+        return data
 
 
 @dataclass
@@ -67,27 +73,21 @@ class DocumentChunk:
     document_id: str
     content: str
     chunk_index: int
+    token_count: int
+    char_count: int
     metadata: DocumentMetadata
-    embedding: Optional[List[float]] = None
-    quality_score: float = 0.0
+    embeddings: Optional[List[float]] = None
     
-    def to_vector_payload(self) -> Dict[str, Any]:
-        """转换为向量数据库载荷"""
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
         return {
+            "chunk_id": self.chunk_id,
             "document_id": self.document_id,
-            "chunk_index": self.chunk_index,
             "content": self.content,
-            "source_type": self.metadata.source_type,
-            "source_path": self.metadata.source_path,
-            "title": self.metadata.title,
-            "author": self.metadata.author,
-            "language": self.metadata.language,
-            "category": self.metadata.category,
-            "tags": self.metadata.tags,
-            "priority": self.metadata.priority,
-            "quality_score": self.quality_score,
-            "created_at": self.metadata.created_at.isoformat(),
-            "updated_at": self.metadata.updated_at.isoformat()
+            "chunk_index": self.chunk_index,
+            "token_count": self.token_count,
+            "char_count": self.char_count,
+            "metadata": self.metadata.to_dict()
         }
 
 
@@ -96,522 +96,358 @@ class ProcessingResult:
     """处理结果"""
     success: bool
     document_id: str
-    chunks_count: int = 0
-    processing_time: float = 0.0
-    error: Optional[str] = None
-    quality_stats: Dict[str, Any] = None
+    chunks_count: int
+    total_tokens: int
+    processing_time: float
+    error_message: Optional[str] = None
+    quality_score: Optional[float] = None
 
 
-class DocumentPreprocessor:
-    """文档预处理器"""
+class DocumentProcessor:
+    """文档处理器"""
     
     def __init__(self):
-        self.text_cleaners = {
-            'html': self._clean_html,
-            'pdf': self._clean_pdf_text,
-            'text': self._clean_plain_text,
-            'markdown': self._clean_markdown
+        # 初始化NLP工具
+        try:
+            self.nlp_zh = spacy.load("zh_core_web_sm")
+        except OSError:
+            logger.warning("中文spaCy模型未安装")
+            self.nlp_zh = None
+        
+        try:
+            self.nlp_en = spacy.load("en_core_web_sm")
+        except OSError:
+            logger.warning("英文spaCy模型未安装")
+            self.nlp_en = None
+        
+        # 初始化分词器
+        self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        
+        # 文本分割器
+        self.text_splitters = {
+            "recursive": RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=200,
+                length_function=len,
+                separators=["\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""]
+            ),
+            "token": TokenTextSplitter(
+                chunk_size=500,
+                chunk_overlap=50,
+                encoding_name="cl100k_base"
+            )
+        }
+    
+    def detect_language(self, text: str) -> str:
+        """检测文本语言"""
+        # 简单的语言检测
+        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+        total_chars = len(text)
+        
+        if total_chars == 0:
+            return "unknown"
+        
+        chinese_ratio = chinese_chars / total_chars
+        if chinese_ratio > 0.3:
+            return "zh"
+        elif chinese_ratio < 0.1:
+            return "en"
+        else:
+            return "mixed"
+    
+    def extract_content_from_file(self, file_path: str) -> Tuple[str, Dict[str, Any]]:
+        """从文件提取内容"""
+        file_path = Path(file_path)
+        file_extension = file_path.suffix.lower()
+        
+        metadata = {
+            "file_path": str(file_path),
+            "file_size": file_path.stat().st_size,
+            "file_extension": file_extension
         }
         
-        # 初始化中文分词
-        jieba.initialize()
+        try:
+            if file_extension == ".txt":
+                loader = TextLoader(str(file_path))
+            elif file_extension == ".pdf":
+                loader = PyPDFLoader(str(file_path))
+            elif file_extension in [".html", ".htm"]:
+                loader = UnstructuredHTMLLoader(str(file_path))
+            elif file_extension in [".md", ".markdown"]:
+                loader = UnstructuredMarkdownLoader(str(file_path))
+            elif file_extension == ".json":
+                loader = JSONLoader(str(file_path), jq_schema=".", text_content=False)
+            else:
+                raise ValueError(f"不支持的文件类型: {file_extension}")
+            
+            documents = loader.load()
+            content = "\n\n".join([doc.page_content for doc in documents])
+            
+            return content, metadata
+            
+        except Exception as e:
+            logger.error(f"提取文件内容失败 {file_path}: {e}")
+            raise
     
-    def preprocess_text(self, text: str, content_type: str = 'text') -> str:
+    async def extract_content_from_url(self, url: str) -> Tuple[str, Dict[str, Any]]:
+        """从URL提取内容"""
+        metadata = {
+            "url": url,
+            "domain": urlparse(url).netloc
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=30) as response:
+                    if response.status == 200:
+                        content_type = response.headers.get('content-type', '')
+                        
+                        if 'text/html' in content_type:
+                            html_content = await response.text()
+                            # 简单的HTML内容提取
+                            content = re.sub(r'<[^>]+>', '', html_content)
+                            content = re.sub(r'\s+', ' ', content).strip()
+                        else:
+                            content = await response.text()
+                        
+                        metadata.update({
+                            "content_type": content_type,
+                            "content_length": len(content)
+                        })
+                        
+                        return content, metadata
+                    else:
+                        raise Exception(f"HTTP {response.status}: {response.reason}")
+                        
+        except Exception as e:
+            logger.error(f"提取URL内容失败 {url}: {e}")
+            raise
+    
+    def preprocess_text(self, text: str) -> str:
         """预处理文本"""
-        # 选择清理器
-        cleaner = self.text_cleaners.get(content_type, self._clean_plain_text)
-        
         # 清理文本
-        cleaned_text = cleaner(text)
+        text = re.sub(r'\s+', ' ', text)  # 标准化空白字符
+        text = re.sub(r'\n+', '\n', text)  # 标准化换行符
+        text = text.strip()
         
-        # 通用清理
-        cleaned_text = self._apply_common_cleaning(cleaned_text)
-        
-        return cleaned_text
-    
-    def _clean_html(self, html_content: str) -> str:
-        """清理HTML内容"""
-        soup = BeautifulSoup(html_content, 'html.parser')
-        
-        # 移除脚本和样式
-        for script in soup(["script", "style"]):
-            script.decompose()
-        
-        # 提取文本
-        text = soup.get_text()
-        
-        # 清理空白行
-        lines = [line.strip() for line in text.splitlines()]
-        lines = [line for line in lines if line]
-        
-        return '\n'.join(lines)
-    
-    def _clean_pdf_text(self, pdf_text: str) -> str:
-        """清理PDF文本"""
-        # 移除页眉页脚模式
-        lines = pdf_text.split('\n')
-        cleaned_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # 跳过可能的页码
-            if re.match(r'^\d+$', line):
-                continue
-            
-            # 跳过短行（可能是页眉页脚）
-            if len(line) < 10:
-                continue
-            
-            cleaned_lines.append(line)
+        # 移除过短的段落
+        lines = text.split('\n')
+        cleaned_lines = [line.strip() for line in lines if len(line.strip()) > 10]
         
         return '\n'.join(cleaned_lines)
     
-    def _clean_plain_text(self, text: str) -> str:
-        """清理纯文本"""
-        # 移除多余空白
-        text = re.sub(r'\s+', ' ', text)
+    def split_text(self, 
+                   text: str, 
+                   splitter_type: str = "recursive",
+                   chunk_size: Optional[int] = None,
+                   chunk_overlap: Optional[int] = None) -> List[str]:
+        """分割文本"""
+        splitter = self.text_splitters.get(splitter_type, self.text_splitters["recursive"])
         
-        # 移除特殊字符
-        text = re.sub(r'[^\w\s\u4e00-\u9fff.,!?;:()[\]{}""''—–-]', '', text)
+        # 动态调整参数
+        if chunk_size or chunk_overlap:
+            if splitter_type == "recursive":
+                splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=chunk_size or 1000,
+                    chunk_overlap=chunk_overlap or 200,
+                    length_function=len
+                )
+            elif splitter_type == "token":
+                splitter = TokenTextSplitter(
+                    chunk_size=chunk_size or 500,
+                    chunk_overlap=chunk_overlap or 50
+                )
         
-        return text.strip()
+        chunks = splitter.split_text(text)
+        return [chunk.strip() for chunk in chunks if len(chunk.strip()) > 50]
     
-    def _clean_markdown(self, markdown_text: str) -> str:
-        """清理Markdown文本"""
-        # 移除Markdown语法
-        text = re.sub(r'#{1,6}\s*', '', markdown_text)  # 标题
-        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # 粗体
-        text = re.sub(r'\*(.*?)\*', r'\1', text)  # 斜体
-        text = re.sub(r'`(.*?)`', r'\1', text)  # 代码
-        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)  # 链接
-        text = re.sub(r'!\[([^\]]*)\]\([^)]+\)', '', text)  # 图片
+    def calculate_content_quality(self, text: str) -> float:
+        """计算内容质量分数"""
+        if not text:
+            return 0.0
         
-        return self._clean_plain_text(text)
+        score = 0.0
+        
+        # 长度检查 (10%)
+        if len(text) > 100:
+            score += 0.1
+        
+        # 语言多样性 (20%)
+        words = text.split()
+        unique_words = set(words)
+        if len(words) > 0:
+            lexical_diversity = len(unique_words) / len(words)
+            score += min(lexical_diversity * 0.4, 0.2)
+        
+        # 句子结构 (20%)
+        sentences = re.split(r'[.!?。！？]', text)
+        if len(sentences) > 1:
+            avg_sentence_length = np.mean([len(s.split()) for s in sentences if s.strip()])
+            if 5 <= avg_sentence_length <= 30:  # 合理的句子长度
+                score += 0.2
+        
+        # 信息密度 (30%)
+        # 检查数字、日期、专有名词等
+        info_patterns = [
+            r'\d+',  # 数字
+            r'\d{4}年|\d{1,2}月|\d{1,2}日',  # 日期
+            r'[A-Z][a-z]+',  # 专有名词
+            r'https?://\S+',  # URL
+        ]
+        
+        info_count = sum(len(re.findall(pattern, text)) for pattern in info_patterns)
+        info_density = min(info_count / len(words) * 10, 0.3) if words else 0
+        score += info_density
+        
+        # 连贯性 (20%)
+        # 简单检查连接词和代词的使用
+        coherence_words = ['因为', '所以', '但是', '然而', '此外', '另外', '因此', '这样', '这些', '那些']
+        coherence_count = sum(1 for word in coherence_words if word in text)
+        coherence_score = min(coherence_count / len(sentences) * 0.5, 0.2) if sentences else 0
+        score += coherence_score
+        
+        return min(score, 1.0)
     
-    def _apply_common_cleaning(self, text: str) -> str:
-        """应用通用清理规则"""
-        # 规范化空白
-        text = re.sub(r'\s+', ' ', text)
-        
-        # 移除过长的重复字符
-        text = re.sub(r'(.)\1{4,}', r'\1\1\1', text)
-        
-        # 移除空行
-        lines = [line.strip() for line in text.split('\n')]
-        lines = [line for line in lines if line]
-        
-        return '\n'.join(lines)
-
-
-class DocumentSplitter:
-    """文档分块器"""
-    
-    def __init__(self):
-        self.splitters = {
-            'recursive': RecursiveCharacterTextSplitter(
-                chunk_size=500,
-                chunk_overlap=50,
-                length_function=len,
-                separators=['\n\n', '\n', '。', '！', '？', '.', '!', '?', ' ', '']
-            ),
-            'character': CharacterTextSplitter(
-                chunk_size=500,
-                chunk_overlap=50,
-                separator='\n'
-            ),
-            'sentence': self._sentence_splitter,
-            'semantic': self._semantic_splitter
+    def extract_entities(self, text: str, language: str = "zh") -> Dict[str, List[str]]:
+        """提取命名实体"""
+        entities = {
+            "PERSON": [],
+            "ORG": [],
+            "GPE": [],  # 地理政治实体
+            "DATE": [],
+            "MONEY": [],
+            "PRODUCT": []
         }
+        
+        try:
+            if language == "zh" and self.nlp_zh:
+                doc = self.nlp_zh(text)
+                for ent in doc.ents:
+                    if ent.label_ in entities:
+                        entities[ent.label_].append(ent.text)
+            elif language == "en" and self.nlp_en:
+                doc = self.nlp_en(text)
+                for ent in doc.ents:
+                    if ent.label_ in entities:
+                        entities[ent.label_].append(ent.text)
+        except Exception as e:
+            logger.warning(f"实体提取失败: {e}")
+        
+        # 去重
+        for key in entities:
+            entities[key] = list(set(entities[key]))
+        
+        return entities
     
-    def split_document(self, 
-                      text: str, 
-                      method: str = 'recursive',
-                      chunk_size: int = 500,
-                      chunk_overlap: int = 50) -> List[str]:
-        """分块文档"""
-        if method in ['recursive', 'character']:
-            splitter = self.splitters[method]
-            splitter.chunk_size = chunk_size
-            splitter.chunk_overlap = chunk_overlap
-            return splitter.split_text(text)
+    def create_document_chunks(self, 
+                             document_id: str,
+                             content: str, 
+                             metadata: DocumentMetadata,
+                             splitter_type: str = "recursive") -> List[DocumentChunk]:
+        """创建文档块"""
+        # 预处理文本
+        processed_content = self.preprocess_text(content)
         
-        elif method == 'sentence':
-            return self._sentence_splitter(text, chunk_size)
+        # 分割文本
+        text_chunks = self.split_text(processed_content, splitter_type)
         
-        elif method == 'semantic':
-            return self._semantic_splitter(text, chunk_size)
-        
-        else:
-            raise ValueError(f"未知的分块方法: {method}")
-    
-    def _sentence_splitter(self, text: str, max_chunk_size: int = 500) -> List[str]:
-        """按句子分块"""
-        # 中英文句子分割
-        sentences = re.split(r'[。！？.!?]\s*', text)
-        
-        chunks = []
-        current_chunk = ""
-        
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
+        # 创建文档块
+        document_chunks = []
+        for i, chunk_text in enumerate(text_chunks):
+            chunk_id = f"{document_id}_{i:04d}"
             
-            # 检查是否需要开始新块
-            if len(current_chunk) + len(sentence) > max_chunk_size and current_chunk:
-                chunks.append(current_chunk.strip())
-                current_chunk = sentence
-            else:
-                if current_chunk:
-                    current_chunk += "。" + sentence
-                else:
-                    current_chunk = sentence
-        
-        if current_chunk:
-            chunks.append(current_chunk.strip())
-        
-        return chunks
-    
-    def _semantic_splitter(self, text: str, max_chunk_size: int = 500) -> List[str]:
-        """语义分块（简化版）"""
-        # 按段落分割
-        paragraphs = text.split('\n\n')
-        
-        chunks = []
-        current_chunk = ""
-        
-        for paragraph in paragraphs:
-            paragraph = paragraph.strip()
-            if not paragraph:
-                continue
+            # 计算token数量
+            token_count = len(self.tokenizer.encode(chunk_text))
             
-            # 如果段落太长，按句子分割
-            if len(paragraph) > max_chunk_size:
-                sentences = self._sentence_splitter(paragraph, max_chunk_size)
-                chunks.extend(sentences)
-            else:
-                # 检查是否需要开始新块
-                if len(current_chunk) + len(paragraph) > max_chunk_size and current_chunk:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = paragraph
-                else:
-                    if current_chunk:
-                        current_chunk += "\n\n" + paragraph
-                    else:
-                        current_chunk = paragraph
+            chunk = DocumentChunk(
+                chunk_id=chunk_id,
+                document_id=document_id,
+                content=chunk_text,
+                chunk_index=i,
+                token_count=token_count,
+                char_count=len(chunk_text),
+                metadata=metadata
+            )
+            
+            document_chunks.append(chunk)
         
-        if current_chunk:
-            chunks.append(current_chunk.strip())
-        
-        return chunks
+        return document_chunks
 
 
 class EmbeddingGenerator:
     """向量生成器"""
     
-    def __init__(self):
-        self.models = {}
-        self.default_model = settings.EMBEDDING_MODEL
-        
-        # 支持的模型配置
-        self.model_configs = {
-            'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2': {
-                'dimension': 384,
-                'language': 'multilingual'
-            },
-            'BAAI/bge-small-zh-v1.5': {
-                'dimension': 512,
-                'language': 'zh'
-            },
-            'BAAI/bge-large-zh-v1.5': {
-                'dimension': 1024,
-                'language': 'zh'
-            },
-            'text-embedding-ada-002': {
-                'dimension': 1536,
-                'language': 'multilingual',
-                'api_based': True
+    def __init__(self, model_configs: Optional[Dict[str, Any]] = None):
+        self.model_configs = model_configs or {
+            "default": {
+                "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                "device": "cuda" if torch.cuda.is_available() else "cpu"
             }
         }
-    
-    def load_model(self, model_name: str) -> SentenceTransformer:
-        """加载模型"""
-        if model_name not in self.models:
-            if self.model_configs.get(model_name, {}).get('api_based', False):
-                # API based model (如OpenAI)
-                self.models[model_name] = None  # 将在generate_embeddings中处理
-            else:
-                self.models[model_name] = SentenceTransformer(model_name)
-                logger.info(f"加载向量模型: {model_name}")
         
-        return self.models[model_name]
+        self.models = {}
+        self.current_model = "default"
+    
+    async def load_model(self, model_name: str = "default") -> None:
+        """加载向量模型"""
+        if model_name not in self.models:
+            config = self.model_configs.get(model_name, self.model_configs["default"])
+            
+            try:
+                model = SentenceTransformer(config["model_name"])
+                if torch.cuda.is_available():
+                    model = model.to(config["device"])
+                
+                self.models[model_name] = model
+                logger.info(f"向量模型 {config['model_name']} 加载成功")
+                
+            except Exception as e:
+                logger.error(f"加载向量模型失败: {e}")
+                raise
     
     async def generate_embeddings(self, 
-                                texts: List[str],
-                                model_name: str = None,
+                                texts: List[str], 
+                                model_name: str = "default",
                                 batch_size: int = 32) -> List[List[float]]:
         """生成向量"""
-        if model_name is None:
-            model_name = self.default_model
+        if model_name not in self.models:
+            await self.load_model(model_name)
         
-        model = self.load_model(model_name)
+        model = self.models[model_name]
         
-        if self.model_configs.get(model_name, {}).get('api_based', False):
-            # API based embedding
-            return await self._generate_api_embeddings(texts, model_name)
-        else:
-            # Local model embedding
-            return await self._generate_local_embeddings(texts, model, batch_size)
-    
-    async def _generate_local_embeddings(self, 
-                                       texts: List[str],
-                                       model: SentenceTransformer,
-                                       batch_size: int) -> List[List[float]]:
-        """生成本地模型向量"""
-        embeddings = []
-        
-        for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i + batch_size]
-            batch_embeddings = model.encode(batch_texts, normalize_embeddings=True)
-            embeddings.extend(batch_embeddings.tolist())
+        try:
+            # 批量生成向量
+            all_embeddings = []
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i + batch_size]
+                batch_embeddings = model.encode(batch_texts, convert_to_numpy=True)
+                all_embeddings.extend(batch_embeddings.tolist())
             
-            # 添加延迟避免过载
-            if i + batch_size < len(texts):
-                await asyncio.sleep(0.1)
-        
-        return embeddings
+            return all_embeddings
+            
+        except Exception as e:
+            logger.error(f"生成向量失败: {e}")
+            raise
     
-    async def _generate_api_embeddings(self, 
-                                     texts: List[str],
-                                     model_name: str) -> List[List[float]]:
-        """生成API模型向量"""
-        # 这里应该实现OpenAI API调用
-        # 为了演示，返回随机向量
-        dimension = self.model_configs[model_name]['dimension']
-        embeddings = []
+    def get_vector_dimension(self, model_name: str = "default") -> int:
+        """获取向量维度"""
+        if model_name not in self.models:
+            # 返回默认维度
+            return 384
         
-        for text in texts:
-            # 生成随机向量（实际应该调用API）
-            embedding = np.random.rand(dimension).tolist()
-            embeddings.append(embedding)
-            await asyncio.sleep(0.01)  # 模拟API延迟
-        
-        return embeddings
-    
-    def get_model_dimension(self, model_name: str) -> int:
-        """获取模型维度"""
-        return self.model_configs.get(model_name, {}).get('dimension', 384)
-
-
-class QualityAssessment:
-    """质量评估器"""
-    
-    def __init__(self):
-        self.min_content_length = 50
-        self.max_content_length = 5000
-        self.min_word_count = 10
-        self.stopwords_ratio_threshold = 0.8
-        
-        # 质量评估权重
-        self.weights = {
-            'length': 0.2,
-            'diversity': 0.3,
-            'coherence': 0.2,
-            'informativeness': 0.3
-        }
-    
-    def assess_chunk_quality(self, chunk: DocumentChunk) -> float:
-        """评估块质量"""
-        content = chunk.content
-        
-        # 长度评分
-        length_score = self._assess_length(content)
-        
-        # 多样性评分
-        diversity_score = self._assess_diversity(content)
-        
-        # 连贯性评分
-        coherence_score = self._assess_coherence(content)
-        
-        # 信息量评分
-        informativeness_score = self._assess_informativeness(content)
-        
-        # 综合评分
-        total_score = (
-            length_score * self.weights['length'] +
-            diversity_score * self.weights['diversity'] +
-            coherence_score * self.weights['coherence'] +
-            informativeness_score * self.weights['informativeness']
-        )
-        
-        return min(max(total_score, 0.0), 1.0)
-    
-    def _assess_length(self, content: str) -> float:
-        """评估长度适当性"""
-        length = len(content)
-        
-        if length < self.min_content_length:
-            return length / self.min_content_length
-        elif length > self.max_content_length:
-            return max(0.5, 1.0 - (length - self.max_content_length) / self.max_content_length)
-        else:
-            return 1.0
-    
-    def _assess_diversity(self, content: str) -> float:
-        """评估词汇多样性"""
-        words = jieba.lcut(content)
-        if len(words) == 0:
-            return 0.0
-        
-        unique_words = set(words)
-        diversity_ratio = len(unique_words) / len(words)
-        
-        return min(diversity_ratio * 2, 1.0)  # 归一化到[0, 1]
-    
-    def _assess_coherence(self, content: str) -> float:
-        """评估连贯性（简化版）"""
-        sentences = re.split(r'[。！？.!?]', content)
-        sentences = [s.strip() for s in sentences if s.strip()]
-        
-        if len(sentences) < 2:
-            return 0.5
-        
-        # 计算句子长度的一致性
-        lengths = [len(s) for s in sentences]
-        if len(lengths) == 0:
-            return 0.0
-        
-        length_variance = np.var(lengths)
-        mean_length = np.mean(lengths)
-        
-        if mean_length == 0:
-            return 0.0
-        
-        coherence_score = 1.0 / (1.0 + length_variance / (mean_length ** 2))
-        
-        return min(max(coherence_score, 0.0), 1.0)
-    
-    def _assess_informativeness(self, content: str) -> float:
-        """评估信息量"""
-        words = jieba.lcut(content)
-        if len(words) == 0:
-            return 0.0
-        
-        # 计算信息密度（非停用词比例）
-        stopwords = {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', '一个', 
-                    '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', '自己', 
-                    '这', '那', '这个', '那个', '什么', '怎么', '为什么', '可以', '能够', '应该'}
-        
-        non_stopwords = [w for w in words if w not in stopwords and len(w) > 1]
-        informativeness = len(non_stopwords) / len(words)
-        
-        return min(informativeness * 1.5, 1.0)  # 放大信息密度的影响
-
-
-class KnowledgeVersionManager:
-    """知识库版本管理器"""
-    
-    def __init__(self, base_path: Path = None):
-        self.base_path = base_path or Path("data/knowledge_versions")
-        self.base_path.mkdir(parents=True, exist_ok=True)
-        
-        self.current_version = self._get_latest_version()
-        self.version_info = {}
-    
-    def _get_latest_version(self) -> str:
-        """获取最新版本"""
-        version_files = list(self.base_path.glob("v*.json"))
-        if not version_files:
-            return "v1.0.0"
-        
-        versions = []
-        for file in version_files:
-            version_str = file.stem
-            try:
-                # 解析版本号 (v1.2.3)
-                parts = version_str[1:].split('.')
-                version_tuple = tuple(int(p) for p in parts)
-                versions.append((version_tuple, version_str))
-            except ValueError:
-                continue
-        
-        if versions:
-            latest = max(versions, key=lambda x: x[0])
-            return latest[1]
-        
-        return "v1.0.0"
-    
-    def create_new_version(self, changes: List[str]) -> str:
-        """创建新版本"""
-        # 解析当前版本号
-        current_parts = self.current_version[1:].split('.')
-        major, minor, patch = int(current_parts[0]), int(current_parts[1]), int(current_parts[2])
-        
-        # 递增版本号
-        patch += 1
-        new_version = f"v{major}.{minor}.{patch}"
-        
-        # 保存版本信息
-        version_info = {
-            "version": new_version,
-            "created_at": datetime.now().isoformat(),
-            "changes": changes,
-            "parent_version": self.current_version,
-            "status": "active"
-        }
-        
-        version_file = self.base_path / f"{new_version}.json"
-        with open(version_file, 'w', encoding='utf-8') as f:
-            json.dump(version_info, f, ensure_ascii=False, indent=2)
-        
-        self.current_version = new_version
-        self.version_info[new_version] = version_info
-        
-        logger.info(f"创建新版本: {new_version}")
-        return new_version
-    
-    def get_version_info(self, version: str = None) -> Dict[str, Any]:
-        """获取版本信息"""
-        if version is None:
-            version = self.current_version
-        
-        if version in self.version_info:
-            return self.version_info[version]
-        
-        version_file = self.base_path / f"{version}.json"
-        if version_file.exists():
-            with open(version_file, 'r', encoding='utf-8') as f:
-                info = json.load(f)
-                self.version_info[version] = info
-                return info
-        
-        return {}
-    
-    def list_versions(self) -> List[Dict[str, Any]]:
-        """列出所有版本"""
-        versions = []
-        for version_file in sorted(self.base_path.glob("v*.json")):
-            version = version_file.stem
-            info = self.get_version_info(version)
-            if info:
-                versions.append(info)
-        
-        return versions
+        model = self.models[model_name]
+        return model.get_sentence_embedding_dimension()
 
 
 class KnowledgeBuilder:
     """知识库构建器"""
     
-    def __init__(self):
-        self.vector_db = get_vector_database()
-        self.preprocessor = DocumentPreprocessor()
-        self.splitter = DocumentSplitter()
-        self.embedding_generator = EmbeddingGenerator()
-        self.quality_assessor = QualityAssessment()
-        self.version_manager = KnowledgeVersionManager()
+    def __init__(self, 
+                 vector_db: Optional[Any] = None,
+                 embedding_generator: Optional[EmbeddingGenerator] = None):
+        self.vector_db = vector_db or get_vector_database()
+        self.embedding_generator = embedding_generator or EmbeddingGenerator()
+        self.document_processor = DocumentProcessor()
         
         # 处理统计
         self.processing_stats = {
@@ -619,350 +455,558 @@ class KnowledgeBuilder:
             "successful_documents": 0,
             "failed_documents": 0,
             "total_chunks": 0,
-            "high_quality_chunks": 0,
-            "processing_times": []
+            "total_vectors": 0,
+            "average_quality_score": 0.0
         }
-        
-        # 默认配置
-        self.default_chunk_size = 500
-        self.default_overlap = 50
-        self.quality_threshold = 0.6
-        self.collection_name = settings.QDRANT_COLLECTION_NAME
     
-    async def process_document(self, 
-                             content: str,
-                             metadata: DocumentMetadata,
-                             chunk_method: str = 'recursive',
-                             embedding_model: str = None) -> ProcessingResult:
-        """处理单个文档"""
-        start_time = time.time()
-        document_id = metadata.source_id
+    async def initialize(self) -> bool:
+        """初始化知识库构建器"""
+        try:
+            # 初始化向量数据库
+            if hasattr(self.vector_db, 'initialize_cluster'):
+                await self.vector_db.initialize_cluster()
+            
+            # 加载默认向量模型
+            await self.embedding_generator.load_model()
+            
+            # 创建默认集合
+            await self._ensure_default_collection()
+            
+            logger.info("知识库构建器初始化成功")
+            return True
+            
+        except Exception as e:
+            logger.error(f"知识库构建器初始化失败: {e}")
+            return False
+    
+    async def _ensure_default_collection(self) -> None:
+        """确保默认集合存在"""
+        collection_name = settings.QDRANT_COLLECTION_NAME
         
         try:
-            # 预处理文档
-            cleaned_content = self.preprocessor.preprocess_text(
-                content, 
-                metadata.mime_type or 'text'
-            )
+            # 检查集合是否存在
+            collection_info = await self.vector_db.get_collection_info(collection_name)
             
-            # 分块
-            chunks_text = self.splitter.split_document(
-                cleaned_content,
-                method=chunk_method,
-                chunk_size=self.default_chunk_size,
-                chunk_overlap=self.default_overlap
-            )
-            
-            # 创建文档块
-            chunks = []
-            for i, chunk_text in enumerate(chunks_text):
-                chunk = DocumentChunk(
-                    chunk_id=f"{document_id}_chunk_{i}",
-                    document_id=document_id,
-                    content=chunk_text,
-                    chunk_index=i,
-                    metadata=metadata
+            if collection_info is None:
+                # 创建默认集合
+                vector_config = VectorIndexConfig(
+                    vector_size=self.embedding_generator.get_vector_dimension(),
+                    distance="Cosine"
                 )
                 
-                # 质量评估
-                chunk.quality_score = self.quality_assessor.assess_chunk_quality(chunk)
+                success = await self.vector_db.create_collection(
+                    collection_name=collection_name,
+                    config=vector_config,
+                    replica_count=1,
+                    shard_count=1
+                )
                 
-                # 只保留高质量块
-                if chunk.quality_score >= self.quality_threshold:
-                    chunks.append(chunk)
+                if success:
+                    logger.info(f"默认集合 {collection_name} 创建成功")
+                else:
+                    raise Exception("创建默认集合失败")
+                    
+        except Exception as e:
+            logger.error(f"确保默认集合失败: {e}")
+            raise
+    
+    async def process_document_from_file(self, 
+                                       file_path: str,
+                                       metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
+        """处理文件文档"""
+        start_time = datetime.now()
+        document_id = str(uuid.uuid4())
+        
+        try:
+            # 提取文件内容
+            content, file_metadata = self.document_processor.extract_content_from_file(file_path)
+            
+            # 创建文档元数据
+            doc_metadata = DocumentMetadata(
+                document_id=document_id,
+                title=metadata.get("title", Path(file_path).stem),
+                source="file",
+                document_type=file_metadata.get("file_extension", "unknown"),
+                language=self.document_processor.detect_language(content),
+                created_at=datetime.now(),
+                file_path=file_path,
+                file_size=file_metadata.get("file_size"),
+                content_hash=hashlib.md5(content.encode()).hexdigest()
+            )
+            
+            if metadata:
+                for key, value in metadata.items():
+                    if hasattr(doc_metadata, key):
+                        setattr(doc_metadata, key, value)
+            
+            # 处理文档
+            result = await self._process_document_content(document_id, content, doc_metadata)
+            
+            processing_time = (datetime.now() - start_time).total_seconds()
+            result.processing_time = processing_time
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"处理文件文档失败 {file_path}: {e}")
+            return ProcessingResult(
+                success=False,
+                document_id=document_id,
+                chunks_count=0,
+                total_tokens=0,
+                processing_time=(datetime.now() - start_time).total_seconds(),
+                error_message=str(e)
+            )
+    
+    async def process_document_from_url(self, 
+                                      url: str,
+                                      metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
+        """处理URL文档"""
+        start_time = datetime.now()
+        document_id = str(uuid.uuid4())
+        
+        try:
+            # 提取URL内容
+            content, url_metadata = await self.document_processor.extract_content_from_url(url)
+            
+            # 创建文档元数据
+            doc_metadata = DocumentMetadata(
+                document_id=document_id,
+                title=metadata.get("title", urlparse(url).path.split("/")[-1] or url),
+                source="url",
+                document_type="web",
+                language=self.document_processor.detect_language(content),
+                created_at=datetime.now(),
+                url=url,
+                content_hash=hashlib.md5(content.encode()).hexdigest()
+            )
+            
+            if metadata:
+                for key, value in metadata.items():
+                    if hasattr(doc_metadata, key):
+                        setattr(doc_metadata, key, value)
+            
+            # 处理文档
+            result = await self._process_document_content(document_id, content, doc_metadata)
+            
+            processing_time = (datetime.now() - start_time).total_seconds()
+            result.processing_time = processing_time
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"处理URL文档失败 {url}: {e}")
+            return ProcessingResult(
+                success=False,
+                document_id=document_id,
+                chunks_count=0,
+                total_tokens=0,
+                processing_time=(datetime.now() - start_time).total_seconds(),
+                error_message=str(e)
+            )
+    
+    async def process_document_from_text(self,
+                                       text: str,
+                                       metadata: Dict[str, Any]) -> ProcessingResult:
+        """处理文本文档"""
+        start_time = datetime.now()
+        document_id = str(uuid.uuid4())
+        
+        try:
+            # 创建文档元数据
+            doc_metadata = DocumentMetadata(
+                document_id=document_id,
+                title=metadata.get("title", "文本文档"),
+                source="text",
+                document_type="text",
+                language=self.document_processor.detect_language(text),
+                created_at=datetime.now(),
+                content_hash=hashlib.md5(text.encode()).hexdigest()
+            )
+            
+            for key, value in metadata.items():
+                if hasattr(doc_metadata, key):
+                    setattr(doc_metadata, key, value)
+            
+            # 处理文档
+            result = await self._process_document_content(document_id, text, doc_metadata)
+            
+            processing_time = (datetime.now() - start_time).total_seconds()
+            result.processing_time = processing_time
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"处理文本文档失败: {e}")
+            return ProcessingResult(
+                success=False,
+                document_id=document_id,
+                chunks_count=0,
+                total_tokens=0,
+                processing_time=(datetime.now() - start_time).total_seconds(),
+                error_message=str(e)
+            )
+    
+    async def _process_document_content(self,
+                                      document_id: str,
+                                      content: str,
+                                      metadata: DocumentMetadata) -> ProcessingResult:
+        """处理文档内容"""
+        try:
+            # 计算内容质量
+            quality_score = self.document_processor.calculate_content_quality(content)
+            
+            # 质量过滤
+            if quality_score < 0.3:
+                logger.warning(f"文档质量分数过低: {quality_score}")
+                return ProcessingResult(
+                    success=False,
+                    document_id=document_id,
+                    chunks_count=0,
+                    total_tokens=0,
+                    processing_time=0,
+                    error_message="文档质量分数过低",
+                    quality_score=quality_score
+                )
+            
+            # 创建文档块
+            chunks = self.document_processor.create_document_chunks(
+                document_id=document_id,
+                content=content,
+                metadata=metadata
+            )
             
             if not chunks:
                 return ProcessingResult(
                     success=False,
                     document_id=document_id,
-                    error="没有通过质量检查的块"
+                    chunks_count=0,
+                    total_tokens=0,
+                    processing_time=0,
+                    error_message="未能创建文档块"
                 )
             
             # 生成向量
-            chunk_contents = [chunk.content for chunk in chunks]
-            embeddings = await self.embedding_generator.generate_embeddings(
-                chunk_contents,
-                model_name=embedding_model
-            )
+            chunk_texts = [chunk.content for chunk in chunks]
+            embeddings = await self.embedding_generator.generate_embeddings(chunk_texts)
             
             # 添加向量到块
             for chunk, embedding in zip(chunks, embeddings):
-                chunk.embedding = embedding
+                chunk.embeddings = embedding
             
             # 存储到向量数据库
-            await self._store_chunks(chunks)
+            vectors = [chunk.embeddings for chunk in chunks]
+            payloads = [self._create_chunk_payload(chunk) for chunk in chunks]
+            ids = [chunk.chunk_id for chunk in chunks]
             
-            processing_time = time.time() - start_time
-            
-            # 更新统计
-            self.processing_stats["total_documents"] += 1
-            self.processing_stats["successful_documents"] += 1
-            self.processing_stats["total_chunks"] += len(chunks)
-            self.processing_stats["high_quality_chunks"] += len(chunks)
-            self.processing_stats["processing_times"].append(processing_time)
-            
-            logger.info(f"成功处理文档 {document_id}: {len(chunks)} 个块")
-            
-            return ProcessingResult(
-                success=True,
-                document_id=document_id,
-                chunks_count=len(chunks),
-                processing_time=processing_time,
-                quality_stats={
-                    "total_chunks": len(chunks_text),
-                    "quality_chunks": len(chunks),
-                    "avg_quality_score": np.mean([c.quality_score for c in chunks])
-                }
+            collection_name = settings.QDRANT_COLLECTION_NAME
+            success = await self.vector_db.upsert_vectors(
+                collection_name=collection_name,
+                vectors=vectors,
+                payloads=payloads,
+                ids=ids
             )
             
+            if success:
+                # 更新统计信息
+                self._update_stats(len(chunks), sum(chunk.token_count for chunk in chunks), quality_score, True)
+                
+                return ProcessingResult(
+                    success=True,
+                    document_id=document_id,
+                    chunks_count=len(chunks),
+                    total_tokens=sum(chunk.token_count for chunk in chunks),
+                    processing_time=0,
+                    quality_score=quality_score
+                )
+            else:
+                return ProcessingResult(
+                    success=False,
+                    document_id=document_id,
+                    chunks_count=len(chunks),
+                    total_tokens=sum(chunk.token_count for chunk in chunks),
+                    processing_time=0,
+                    error_message="向量存储失败"
+                )
+                
         except Exception as e:
-            processing_time = time.time() - start_time
-            
-            self.processing_stats["total_documents"] += 1
-            self.processing_stats["failed_documents"] += 1
-            self.processing_stats["processing_times"].append(processing_time)
-            
-            logger.error(f"处理文档失败 {document_id}: {e}")
-            
-            return ProcessingResult(
-                success=False,
-                document_id=document_id,
-                processing_time=processing_time,
-                error=str(e)
-            )
+            logger.error(f"处理文档内容失败: {e}")
+            self._update_stats(0, 0, 0, False)
+            raise
     
-    async def _store_chunks(self, chunks: List[DocumentChunk]) -> None:
-        """存储块到向量数据库"""
-        vectors = [chunk.embedding for chunk in chunks]
-        payloads = [chunk.to_vector_payload() for chunk in chunks]
-        ids = [chunk.chunk_id for chunk in chunks]
+    def _create_chunk_payload(self, chunk: DocumentChunk) -> Dict[str, Any]:
+        """创建块的载荷数据"""
+        payload = {
+            "chunk_id": chunk.chunk_id,
+            "document_id": chunk.document_id,
+            "content": chunk.content,
+            "chunk_index": chunk.chunk_index,
+            "token_count": chunk.token_count,
+            "char_count": chunk.char_count,
+            "document_type": chunk.metadata.document_type,
+            "source": chunk.metadata.source,
+            "language": chunk.metadata.language,
+            "title": chunk.metadata.title,
+            "created_at": chunk.metadata.created_at.isoformat() if chunk.metadata.created_at else None
+        }
         
-        await self.vector_db.insert_vectors(
-            collection_name=self.collection_name,
-            vectors=vectors,
-            payloads=payloads,
-            ids=ids
-        )
+        # 添加可选字段
+        optional_fields = ["category", "tags", "author", "url", "file_path"]
+        for field in optional_fields:
+            value = getattr(chunk.metadata, field, None)
+            if value is not None:
+                payload[field] = value
+        
+        return payload
     
-    async def process_batch(self, 
-                          documents: List[Tuple[str, DocumentMetadata]],
-                          max_concurrent: int = 5) -> List[ProcessingResult]:
+    def _update_stats(self, chunks_count: int, tokens_count: int, quality_score: float, success: bool) -> None:
+        """更新处理统计"""
+        self.processing_stats["total_documents"] += 1
+        
+        if success:
+            self.processing_stats["successful_documents"] += 1
+            self.processing_stats["total_chunks"] += chunks_count
+            self.processing_stats["total_vectors"] += chunks_count
+            
+            # 更新平均质量分数
+            total_success = self.processing_stats["successful_documents"]
+            current_avg = self.processing_stats["average_quality_score"]
+            self.processing_stats["average_quality_score"] = (
+                (current_avg * (total_success - 1) + quality_score) / total_success
+            )
+        else:
+            self.processing_stats["failed_documents"] += 1
+    
+    async def batch_process_documents(self, 
+                                    document_sources: List[Dict[str, Any]],
+                                    max_concurrent: int = 5) -> List[ProcessingResult]:
         """批量处理文档"""
         semaphore = asyncio.Semaphore(max_concurrent)
         
-        async def process_with_semaphore(content, metadata):
+        async def process_single_document(source: Dict[str, Any]) -> ProcessingResult:
             async with semaphore:
-                return await self.process_document(content, metadata)
+                source_type = source.get("type")
+                
+                if source_type == "file":
+                    return await self.process_document_from_file(
+                        source["path"], 
+                        source.get("metadata", {})
+                    )
+                elif source_type == "url":
+                    return await self.process_document_from_url(
+                        source["url"], 
+                        source.get("metadata", {})
+                    )
+                elif source_type == "text":
+                    return await self.process_document_from_text(
+                        source["content"], 
+                        source.get("metadata", {})
+                    )
+                else:
+                    return ProcessingResult(
+                        success=False,
+                        document_id="unknown",
+                        chunks_count=0,
+                        total_tokens=0,
+                        processing_time=0,
+                        error_message=f"不支持的文档类型: {source_type}"
+                    )
         
-        tasks = [
-            process_with_semaphore(content, metadata)
-            for content, metadata in documents
-        ]
-        
+        # 并发处理所有文档
+        tasks = [process_single_document(source) for source in document_sources]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # 处理异常
+        # 处理异常结果
         processed_results = []
-        for i, result in enumerate(results):
+        for result in results:
             if isinstance(result, Exception):
                 processed_results.append(ProcessingResult(
                     success=False,
-                    document_id=documents[i][1].source_id,
-                    error=str(result)
+                    document_id="error",
+                    chunks_count=0,
+                    total_tokens=0,
+                    processing_time=0,
+                    error_message=str(result)
                 ))
             else:
                 processed_results.append(result)
         
         return processed_results
     
-    async def update_document(self, 
-                            content: str,
-                            metadata: DocumentMetadata) -> ProcessingResult:
+    async def update_document(self, document_id: str, new_content: str, metadata: Dict[str, Any]) -> bool:
         """更新文档"""
-        document_id = metadata.source_id
-        
-        # 删除旧版本
-        await self.vector_db.delete_vectors(
-            collection_name=self.collection_name,
-            filter_conditions={"must_document_id": document_id}
-        )
-        
-        # 处理新版本
-        metadata.updated_at = datetime.now()
-        return await self.process_document(content, metadata)
+        try:
+            # 删除旧的文档块
+            await self.delete_document(document_id)
+            
+            # 处理新内容
+            result = await self.process_document_from_text(new_content, metadata)
+            
+            return result.success
+            
+        except Exception as e:
+            logger.error(f"更新文档失败 {document_id}: {e}")
+            return False
     
     async def delete_document(self, document_id: str) -> bool:
         """删除文档"""
         try:
-            await self.vector_db.delete_vectors(
-                collection_name=self.collection_name,
-                filter_conditions={"must_document_id": document_id}
+            # 查找所有相关的块ID
+            # 这里需要实现查询功能，暂时使用简单的ID模式
+            chunk_ids = []
+            for i in range(1000):  # 假设最多1000个块
+                chunk_id = f"{document_id}_{i:04d}"
+                chunk_ids.append(chunk_id)
+            
+            # 删除向量
+            collection_name = settings.QDRANT_COLLECTION_NAME
+            success = await self.vector_db.delete_vectors(
+                collection_name=collection_name,
+                point_ids=chunk_ids
             )
-            logger.info(f"删除文档: {document_id}")
-            return True
+            
+            return success
+            
         except Exception as e:
-            logger.error(f"删除文档失败: {e}")
+            logger.error(f"删除文档失败 {document_id}: {e}")
             return False
     
-    async def build_travel_knowledge_base(self) -> str:
-        """构建旅行知识库"""
-        logger.info("开始构建旅行知识库")
+    def get_processing_stats(self) -> Dict[str, Any]:
+        """获取处理统计信息"""
+        stats = self.processing_stats.copy()
         
-        # 收集旅行相关文档
-        travel_documents = await self._collect_travel_documents()
+        # 计算成功率
+        total_docs = stats["total_documents"]
+        if total_docs > 0:
+            stats["success_rate"] = stats["successful_documents"] / total_docs * 100
+        else:
+            stats["success_rate"] = 0
         
-        if not travel_documents:
-            logger.warning("没有找到旅行文档")
-            return ""
-        
-        # 批量处理
-        results = await self.process_batch(travel_documents, max_concurrent=3)
-        
-        # 统计结果
-        successful = [r for r in results if r.success]
-        failed = [r for r in results if not r.success]
-        
-        changes = [
-            f"处理了 {len(travel_documents)} 个旅行文档",
-            f"成功: {len(successful)}, 失败: {len(failed)}",
-            f"总计生成 {sum(r.chunks_count for r in successful)} 个高质量块"
-        ]
-        
-        # 创建新版本
-        version = self.version_manager.create_new_version(changes)
-        
-        logger.info(f"旅行知识库构建完成，版本: {version}")
-        return version
+        return stats
     
-    async def _collect_travel_documents(self) -> List[Tuple[str, DocumentMetadata]]:
-        """收集旅行文档"""
-        documents = []
+    async def create_travel_knowledge_base(self) -> Dict[str, Any]:
+        """创建旅行知识库"""
+        logger.info("开始创建旅行知识库...")
         
-        # 示例：添加一些旅行相关文档
-        travel_data = [
+        # 定义旅行相关的文档源
+        travel_documents = [
             {
+                "type": "text",
                 "content": """
-                北京是中国的首都，拥有悠久的历史和丰富的文化遗产。主要景点包括故宫、天安门广场、长城、颐和园等。
-                最佳旅游时间是春季（4-5月）和秋季（9-10月），气候宜人。
-                交通便利，有多个机场和火车站。住宿选择丰富，从经济型酒店到豪华酒店应有尽有。
-                美食推荐：北京烤鸭、炸酱面、豆汁等。
+                旅行规划指南
+                
+                制定旅行计划时，需要考虑以下几个重要因素：
+                
+                1. 目的地选择：根据个人兴趣、预算和时间来选择合适的目的地。
+                
+                2. 最佳旅行时间：了解目的地的气候特点和旅游旺季，选择合适的出行时间。
+                
+                3. 预算规划：包括交通费、住宿费、餐饮费、景点门票和购物费用等。
+                
+                4. 交通安排：选择合适的交通方式，包括飞机、火车、汽车等。
+                
+                5. 住宿预订：根据预算和需求选择合适的住宿类型。
+                
+                6. 行程安排：合理安排每天的活动，留出适当的休息时间。
+                
+                7. 必备物品：准备护照、签证、保险、常用药品等必需品。
                 """,
-                "metadata": DocumentMetadata(
-                    source_id="beijing_travel_guide",
-                    source_type="manual",
-                    source_path="travel_guides/beijing.txt",
-                    title="北京旅游指南",
-                    category="destination_guide",
-                    tags=["北京", "首都", "历史", "文化"],
-                    priority=5
-                )
+                "metadata": {
+                    "title": "旅行规划指南",
+                    "category": "travel_planning",
+                    "tags": ["规划", "指南", "基础知识"]
+                }
             },
             {
+                "type": "text",
                 "content": """
-                上海是中国的经济中心，现代化程度很高。著名景点有外滩、东方明珠塔、豫园、南京路等。
-                上海的夜景非常美丽，特别是黄浦江两岸的建筑群。
-                交通发达，地铁网络覆盖全市。购物和美食选择众多。
-                推荐住宿：外滩附近的酒店可以欣赏江景。
+                酒店预订攻略
+                
+                选择和预订酒店的技巧：
+                
+                1. 位置选择：优先考虑交通便利、安全的区域。
+                
+                2. 设施服务：根据需求选择带有合适设施的酒店。
+                
+                3. 价格比较：使用多个预订平台比较价格。
+                
+                4. 用户评价：仔细阅读其他住客的真实评价。
+                
+                5. 取消政策：了解酒店的取消和修改政策。
+                
+                6. 预订时机：提前预订通常能获得更好的价格。
+                
+                7. 会员优惠：利用酒店会员计划获得优惠和升级。
                 """,
-                "metadata": DocumentMetadata(
-                    source_id="shanghai_travel_guide",
-                    source_type="manual",
-                    source_path="travel_guides/shanghai.txt",
-                    title="上海旅游指南",
-                    category="destination_guide",
-                    tags=["上海", "现代化", "外滩", "购物"],
-                    priority=5
-                )
+                "metadata": {
+                    "title": "酒店预订攻略",
+                    "category": "accommodation",
+                    "tags": ["酒店", "预订", "攻略"]
+                }
             },
             {
+                "type": "text",
                 "content": """
-                西安是著名的历史文化名城，有3000多年的历史。兵马俑是世界八大奇迹之一，不可错过。
-                其他重要景点：大雁塔、华清池、城墙、钟楼等。
-                西安美食丰富：肉夹馍、凉皮、羊肉泡馍、胡辣汤等。
-                建议游玩时间：3-4天。交通便利，有机场和高铁站。
+                航班预订指南
+                
+                预订机票的最佳实践：
+                
+                1. 提前预订：通常提前2-3个月预订能获得较好的价格。
+                
+                2. 灵活日期：如果时间灵活，可以选择价格较低的日期。
+                
+                3. 比较价格：使用比价网站比较不同航空公司的价格。
+                
+                4. 考虑中转：有时中转航班比直飞更便宜。
+                
+                5. 里程积累：选择能累积里程的航空公司。
+                
+                6. 行李政策：了解不同航空公司的行李限制和费用。
+                
+                7. 退改签：关注票价的退改签条件。
                 """,
-                "metadata": DocumentMetadata(
-                    source_id="xian_travel_guide",
-                    source_type="manual",
-                    source_path="travel_guides/xian.txt",
-                    title="西安旅游指南",
-                    category="destination_guide",
-                    tags=["西安", "历史", "兵马俑", "美食"],
-                    priority=5
-                )
-            },
-            {
-                "content": """
-                预订机票的最佳时间通常是出发前2-8周。周二和周三的机票通常比较便宜。
-                比较不同航空公司和预订网站的价格。考虑使用里程积分或信用卡积分。
-                注意行李规定和退改签政策。建议购买旅行保险。
-                特价机票注意事项：时间限制、退改限制、座位选择等。
-                """,
-                "metadata": DocumentMetadata(
-                    source_id="flight_booking_tips",
-                    source_type="manual",
-                    source_path="tips/flight_booking.txt",
-                    title="机票预订攻略",
-                    category="booking_tips",
-                    tags=["机票", "预订", "省钱", "攻略"],
-                    priority=4
-                )
-            },
-            {
-                "content": """
-                选择酒店的关键因素：位置、价格、设施、评价、安全性。
-                预订平台比较：Booking.com、Agoda、携程、去哪儿等。
-                住宿类型：酒店、民宿、青旅、公寓等各有优缺点。
-                预订技巧：提前预订享优惠、关注促销活动、会员积分等。
-                入住注意事项：确认预订信息、了解取消政策、检查房间设施等。
-                """,
-                "metadata": DocumentMetadata(
-                    source_id="hotel_booking_guide",
-                    source_type="manual",
-                    source_path="tips/hotel_booking.txt",
-                    title="酒店预订指南",
-                    category="booking_tips",
-                    tags=["酒店", "住宿", "预订", "攻略"],
-                    priority=4
-                )
+                "metadata": {
+                    "title": "航班预订指南",
+                    "category": "transportation",
+                    "tags": ["航班", "机票", "预订"]
+                }
             }
         ]
         
-        for data in travel_data:
-            documents.append((data["content"], data["metadata"]))
+        # 批量处理文档
+        results = await self.batch_process_documents(travel_documents)
         
-        return documents
-    
-    def get_processing_stats(self) -> Dict[str, Any]:
-        """获取处理统计"""
-        processing_times = self.processing_stats["processing_times"]
+        # 统计结果
+        success_count = sum(1 for r in results if r.success)
+        total_chunks = sum(r.chunks_count for r in results if r.success)
         
-        stats = {
-            "total_documents": self.processing_stats["total_documents"],
-            "successful_documents": self.processing_stats["successful_documents"],
-            "failed_documents": self.processing_stats["failed_documents"],
-            "success_rate": self.processing_stats["successful_documents"] / max(self.processing_stats["total_documents"], 1),
-            "total_chunks": self.processing_stats["total_chunks"],
-            "high_quality_chunks": self.processing_stats["high_quality_chunks"],
-            "quality_rate": self.processing_stats["high_quality_chunks"] / max(self.processing_stats["total_chunks"], 1)
+        summary = {
+            "total_documents": len(travel_documents),
+            "successful_documents": success_count,
+            "total_chunks": total_chunks,
+            "processing_results": [
+                {
+                    "document_id": r.document_id,
+                    "success": r.success,
+                    "chunks_count": r.chunks_count,
+                    "error": r.error_message
+                }
+                for r in results
+            ]
         }
         
-        if processing_times:
-            stats.update({
-                "avg_processing_time": np.mean(processing_times),
-                "min_processing_time": np.min(processing_times),
-                "max_processing_time": np.max(processing_times)
-            })
-        
-        return stats
+        logger.info(f"旅行知识库创建完成: {success_count}/{len(travel_documents)} 文档处理成功")
+        return summary
 
 
-# 全局实例
-knowledge_builder = None
+# 全局知识库构建器实例
+_knowledge_builder: Optional[KnowledgeBuilder] = None
 
-def get_knowledge_builder() -> KnowledgeBuilder:
+
+def get_knowledge_builder(vector_db: Optional[Any] = None, 
+                         embedding_generator: Optional[EmbeddingGenerator] = None) -> KnowledgeBuilder:
     """获取知识库构建器实例"""
-    global knowledge_builder
-    if knowledge_builder is None:
-        knowledge_builder = KnowledgeBuilder()
-    return knowledge_builder 
+    global _knowledge_builder
+    if _knowledge_builder is None:
+        _knowledge_builder = KnowledgeBuilder(vector_db, embedding_generator)
+    return _knowledge_builder 

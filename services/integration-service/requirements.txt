@@ -1,0 +1,20 @@
+# 基础Web框架
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+
+# HTTP客户端
+httpx==0.25.2
+
+# 重试机制
+tenacity==8.2.3
+
+# 数据库和缓存
+redis==5.0.1
+aioredis==2.0.1
+
+# 配置和环境
+python-dotenv==1.0.0
+
+# 日志和监控
+structlog==23.2.0 

@@ -274,6 +274,97 @@ class InformationExtractor:
             
         return travel_entities
     
+    def extract_destinations(self, text: str) -> List[str]:
+        """提取目的地信息"""
+        destinations = []
+        
+        # 预定义的城市名单
+        city_names = {
+            '北京', '上海', '广州', '深圳', '杭州', '成都', '重庆', '西安', '南京', '武汉',
+            '东京', '大阪', '京都', '首尔', '釜山', '曼谷', '普吉岛', '新加坡', '吉隆坡',
+            '巴黎', '伦敦', '罗马', '巴塞罗那', '阿姆斯特丹', '柏林', '慕尼黑',
+            '纽约', '洛杉矶', '旧金山', '芝加哥', '波士顿', '华盛顿', '拉斯维加斯',
+            '悉尼', '墨尔本', '布里斯班', '黄金海岸'
+        }
+        
+        # 检查文本中的城市名
+        for city in city_names:
+            if city in text:
+                destinations.append(city)
+        
+        # 使用正则表达式匹配目的地模式
+        patterns = [
+            r'(?:去|到|在|想去|计划去|打算去)\s*([^\s，。！？]+?(?:市|省|国|地区|景区|景点))',
+            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # 英文地名
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, text)
+            destinations.extend(matches)
+        
+        return list(set(destinations))
+    
+    def extract_dates(self, text: str) -> List[str]:
+        """提取日期信息"""
+        dates = []
+        
+        # 日期模式
+        patterns = [
+            r'\d{4}年\d{1,2}月\d{1,2}日?',  # 2024年3月15日
+            r'\d{1,2}月\d{1,2}日?',  # 3月15日
+            r'\d{1,2}/\d{1,2}',  # 3/15
+            r'\d{4}-\d{1,2}-\d{1,2}',  # 2024-03-15
+            r'明天|后天|下周|下个月|春节|国庆|暑假|寒假',
+            r'\d{1,2}天|\d{1,2}周|\d{1,2}个月'
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, text)
+            dates.extend(matches)
+        
+        return list(set(dates))
+    
+    def extract_budget_info(self, text: str) -> List[str]:
+        """提取预算信息"""
+        budget_info = []
+        
+        # 预算模式
+        patterns = [
+            r'\d+万?元',  # 5000元, 1万元
+            r'\$\d+',  # $500
+            r'€\d+',  # €500
+            r'\d+美元',  # 500美元
+            r'\d+欧元',  # 500欧元
+            r'预算.*?(\d+).*?(?:元|块|万|千)',
+            r'(\d+).*?(?:元|块|万|千).*?预算'
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, text)
+            budget_info.extend(matches)
+        
+        return list(set(budget_info))
+    
+    def extract_travel_preferences(self, text: str) -> List[str]:
+        """提取旅行偏好"""
+        preferences = []
+        
+        # 偏好关键词
+        preference_keywords = {
+            '住宿': ['豪华', '经济', '民宿', '酒店', '青旅', '五星', '四星'],
+            '交通': ['飞机', '火车', '自驾', '公共交通', '包车'],
+            '活动': ['观光', '美食', '购物', '休闲', '冒险', '文化', '自然'],
+            '人群': ['情侣', '家庭', '朋友', '独自', '蜜月', '亲子'],
+            '风格': ['奢华', '经济', '舒适', '快节奏', '慢生活', '深度游']
+        }
+        
+        for category, keywords in preference_keywords.items():
+            for keyword in keywords:
+                if keyword in text:
+                    preferences.append(f"{category}:{keyword}")
+        
+        return preferences
+    
     def extract_key_phrases(self, text: str, max_phrases: int = 10) -> List[str]:
         """提取关键短语"""
         doc = self.nlp(text)
@@ -671,6 +762,198 @@ class ContextEngine:
             context_parts.append(f"{role}: {chunk.content}")
         
         return "\n\n".join(context_parts)
+    
+    async def optimize_context_window(self, conversation_id: str) -> None:
+        """优化上下文窗口"""
+        
+        # 获取当前对话的所有块
+        conv_chunks = [chunk for chunk in self.context_window.chunks 
+                      if chunk.chunk_id.startswith(conversation_id[:8])]
+        
+        if len(conv_chunks) <= self.context_window.max_chunks:
+            return
+        
+        # 按重要性和时间排序
+        sorted_chunks = sorted(conv_chunks, 
+                             key=lambda x: (x.importance_score, x.timestamp.timestamp()), 
+                             reverse=True)
+        
+        # 保留最重要的块
+        keep_count = self.context_window.max_chunks // 2
+        important_chunks = sorted_chunks[:keep_count]
+        
+        # 保留最近的块
+        recent_chunks = sorted(conv_chunks, key=lambda x: x.timestamp)[-keep_count:]
+        
+        # 合并并去重
+        kept_chunks = list({chunk.chunk_id: chunk for chunk in important_chunks + recent_chunks}.values())
+        
+        # 更新上下文窗口
+        self.context_window.chunks = [chunk for chunk in self.context_window.chunks 
+                                    if chunk not in conv_chunks or chunk in kept_chunks]
+        
+        logger.info(f"优化对话 {conversation_id} 上下文窗口: {len(conv_chunks)} -> {len(kept_chunks)}")
+    
+    async def extract_key_information(self, chunks: List[ContextChunk]) -> Dict[str, Any]:
+        """提取关键信息摘要"""
+        
+        if not chunks:
+            return {}
+        
+        # 合并所有内容
+        combined_text = " ".join([chunk.content for chunk in chunks])
+        
+        # 提取关键实体
+        all_entities = []
+        travel_info = {
+            "destinations": set(),
+            "dates": set(),
+            "budget": set(),
+            "preferences": set()
+        }
+        
+        for chunk in chunks:
+            all_entities.extend(chunk.entities)
+            
+            # 提取旅行信息
+            destinations = self.information_extractor.extract_destinations(chunk.content)
+            dates = self.information_extractor.extract_dates(chunk.content)
+            budget = self.information_extractor.extract_budget_info(chunk.content)
+            preferences = self.information_extractor.extract_travel_preferences(chunk.content)
+            
+            travel_info["destinations"].update(destinations)
+            travel_info["dates"].update(dates)
+            travel_info["budget"].update(budget)
+            travel_info["preferences"].update(preferences)
+        
+        # 转换为列表
+        for key in travel_info:
+            travel_info[key] = list(travel_info[key])
+        
+        # 提取关键主题
+        topics = self.information_extractor.extract_topics(combined_text)
+        
+        return {
+            "entities": all_entities,
+            "travel_info": travel_info,
+            "topics": topics,
+            "summary": combined_text[:500] + "..." if len(combined_text) > 500 else combined_text,
+            "chunk_count": len(chunks),
+            "total_tokens": sum(chunk.tokens_count for chunk in chunks)
+        }
+    
+    async def get_contextual_recommendations(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """获取上下文相关的推荐"""
+        
+        conv_state = self.conversation_states.get(conversation_id)
+        if not conv_state:
+            return []
+        
+        recommendations = []
+        
+        # 基于旅行上下文的推荐
+        travel_context = conv_state.travel_context
+        
+        if "destinations" in travel_context and travel_context["destinations"]:
+            destinations = travel_context["destinations"]
+            recommendations.append({
+                "type": "destination_info",
+                "title": f"关于{destinations[0]}的更多信息",
+                "content": f"我可以为您提供{destinations[0]}的详细旅行指南、最佳旅行时间、必游景点等信息。",
+                "action": f"tell me about {destinations[0]}"
+            })
+        
+        if "dates" in travel_context and travel_context["dates"]:
+            recommendations.append({
+                "type": "weather_info",
+                "title": "天气信息查询",
+                "content": "我可以为您查询目的地的天气预报，帮助您准备合适的衣物。",
+                "action": "check weather"
+            })
+        
+        if "budget" in travel_context and travel_context["budget"]:
+            recommendations.append({
+                "type": "budget_planning",
+                "title": "预算规划建议",
+                "content": "我可以根据您的预算为您推荐性价比最高的旅行方案。",
+                "action": "budget planning"
+            })
+        
+        # 基于对话历史的推荐
+        if conv_state.current_topic:
+            if "flight" in conv_state.current_topic.lower():
+                recommendations.append({
+                    "type": "flight_booking",
+                    "title": "航班预订服务",
+                    "content": "我可以帮您搜索并比较不同航班的价格和时间。",
+                    "action": "search flights"
+                })
+            
+            elif "hotel" in conv_state.current_topic.lower():
+                recommendations.append({
+                    "type": "hotel_booking",
+                    "title": "酒店预订服务",
+                    "content": "我可以为您推荐符合预算和偏好的酒店。",
+                    "action": "search hotels"
+                })
+        
+        return recommendations[:3]  # 最多返回3个推荐
+    
+    async def analyze_conversation_progress(self, conversation_id: str) -> Dict[str, Any]:
+        """分析对话进度"""
+        
+        conv_state = self.conversation_states.get(conversation_id)
+        if not conv_state:
+            return {}
+        
+        # 获取对话块
+        conv_chunks = [chunk for chunk in self.context_window.chunks 
+                      if chunk.chunk_id.startswith(conversation_id[:8])]
+        
+        # 分析完整性
+        required_info = ["destination", "dates", "budget", "preferences"]
+        collected_info = []
+        missing_info = []
+        
+        for info_type in required_info:
+            if info_type in conv_state.travel_context and conv_state.travel_context[info_type]:
+                collected_info.append(info_type)
+            else:
+                missing_info.append(info_type)
+        
+        # 计算进度
+        progress_percentage = len(collected_info) / len(required_info) * 100
+        
+        # 分析对话阶段
+        stage = "information_gathering"
+        if progress_percentage >= 75:
+            stage = "planning_ready"
+        elif progress_percentage >= 50:
+            stage = "partial_info"
+        elif progress_percentage >= 25:
+            stage = "initial_info"
+        
+        # 生成建议
+        next_steps = []
+        if "destination" in missing_info:
+            next_steps.append("请告诉我您想去哪里旅行？")
+        if "dates" in missing_info:
+            next_steps.append("您计划什么时候出行？")
+        if "budget" in missing_info:
+            next_steps.append("您的预算大概是多少？")
+        if "preferences" in missing_info:
+            next_steps.append("您有什么特别的偏好或要求吗？")
+        
+        return {
+            "conversation_id": conversation_id,
+            "progress_percentage": progress_percentage,
+            "stage": stage,
+            "collected_info": collected_info,
+            "missing_info": missing_info,
+            "next_steps": next_steps,
+            "total_interactions": len(conv_chunks),
+            "conversation_duration": (datetime.now() - conv_state.last_activity).total_seconds() / 60
+        }
     
     async def _update_conversation_state(self, 
                                        conversation_id: str,

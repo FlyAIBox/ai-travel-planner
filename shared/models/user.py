@@ -1,360 +1,329 @@
 """
-用户域数据模型
-包含用户、用户偏好、忠诚度计划、支付方式等模型
+用户领域数据模型
+定义用户、用户偏好、忠诚度计划等模型
 """
 
 from datetime import datetime, date
-from decimal import Decimal
+from typing import Optional, List, Dict, Any
 from enum import Enum
-from typing import Dict, List, Optional, Union
-from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, EmailStr, validator, root_validator
+from pydantic import Field, validator, EmailStr
+from .common import BaseModel, IDMixin, TimestampMixin, Contact, Language, Currency, Status
 
 
-# ==================== 枚举类型 ====================
+class UserRole(str, Enum):
+    """用户角色"""
+    GUEST = "guest"          # 游客
+    USER = "user"            # 普通用户
+    VIP = "vip"              # VIP用户
+    ADMIN = "admin"          # 管理员
+    SUPER_ADMIN = "super_admin"  # 超级管理员
+
+
+class Gender(str, Enum):
+    """性别"""
+    MALE = "male"
+    FEMALE = "female"
+    OTHER = "other"
+    PREFER_NOT_SAY = "prefer_not_say"
+
+
 class TravelStyle(str, Enum):
     """旅行风格"""
-    LUXURY = "luxury"              # 奢华
-    BUDGET = "budget"              # 经济
-    ADVENTURE = "adventure"        # 冒险
-    CULTURAL = "cultural"          # 文化
-    FAMILY = "family"              # 家庭
-    BUSINESS = "business"          # 商务
-    ROMANTIC = "romantic"          # 浪漫
-    SOLO = "solo"                  # 独自
-    ECO_FRIENDLY = "eco_friendly"  # 环保
+    BUDGET = "budget"            # 经济型
+    COMFORT = "comfort"          # 舒适型
+    LUXURY = "luxury"            # 豪华型
+    ADVENTURE = "adventure"      # 冒险型
+    CULTURAL = "cultural"        # 文化型
+    RELAXATION = "relaxation"    # 休闲型
+    BUSINESS = "business"        # 商务型
+    FAMILY = "family"            # 家庭型
 
 
-class Language(str, Enum):
-    """支持的语言"""
-    ZH_CN = "zh-cn"    # 简体中文
-    ZH_TW = "zh-tw"    # 繁体中文
-    EN_US = "en-us"    # 英语
-    JA_JP = "ja-jp"    # 日语
-    KO_KR = "ko-kr"    # 韩语
-    FR_FR = "fr-fr"    # 法语
-    DE_DE = "de-de"    # 德语
-    ES_ES = "es-es"    # 西班牙语
+class TravelFrequency(str, Enum):
+    """旅行频率"""
+    RARELY = "rarely"        # 很少（1年少于1次）
+    OCCASIONALLY = "occasionally"  # 偶尔（1年1-2次）
+    REGULARLY = "regularly"  # 经常（1年3-5次）
+    FREQUENTLY = "frequently"  # 频繁（1年6次以上）
 
 
-class Currency(str, Enum):
-    """货币类型"""
-    CNY = "CNY"    # 人民币
-    USD = "USD"    # 美元
-    EUR = "EUR"    # 欧元
-    JPY = "JPY"    # 日元
-    KRW = "KRW"    # 韩元
-    GBP = "GBP"    # 英镑
+class AccommodationType(str, Enum):
+    """住宿类型偏好"""
+    HOTEL = "hotel"              # 酒店
+    RESORT = "resort"            # 度假村
+    HOSTEL = "hostel"            # 青年旅社
+    APARTMENT = "apartment"      # 公寓
+    VILLA = "villa"              # 别墅
+    BNB = "bnb"                  # 民宿
+    CAMPING = "camping"          # 露营
 
 
-class UserStatus(str, Enum):
-    """用户状态"""
-    ACTIVE = "active"        # 活跃
-    INACTIVE = "inactive"    # 非活跃
-    SUSPENDED = "suspended"  # 暂停
-    BANNED = "banned"        # 禁用
+class TransportationType(str, Enum):
+    """交通方式偏好"""
+    FLIGHT = "flight"            # 飞机
+    TRAIN = "train"              # 火车
+    BUS = "bus"                  # 巴士
+    CAR = "car"                  # 汽车
+    MOTORCYCLE = "motorcycle"   # 摩托车
+    BICYCLE = "bicycle"          # 自行车
+    WALKING = "walking"          # 步行
 
 
-class PaymentMethodType(str, Enum):
-    """支付方式类型"""
-    CREDIT_CARD = "credit_card"    # 信用卡
-    DEBIT_CARD = "debit_card"      # 借记卡
-    ALIPAY = "alipay"              # 支付宝
-    WECHAT_PAY = "wechat_pay"      # 微信支付
-    PAYPAL = "paypal"              # PayPal
-    BANK_TRANSFER = "bank_transfer" # 银行转账
+class ActivityType(str, Enum):
+    """活动类型偏好"""
+    SIGHTSEEING = "sightseeing"      # 观光
+    MUSEUM = "museum"                # 博物馆
+    SHOPPING = "shopping"            # 购物
+    FOOD = "food"                    # 美食
+    NIGHTLIFE = "nightlife"          # 夜生活
+    NATURE = "nature"                # 自然风光
+    SPORTS = "sports"                # 运动
+    PHOTOGRAPHY = "photography"      # 摄影
+    HISTORY = "history"              # 历史文化
+    ART = "art"                      # 艺术
+    MUSIC = "music"                  # 音乐
+    FESTIVAL = "festival"            # 节庆活动
+
+
+class UserProfile(BaseModel):
+    """用户资料"""
+    first_name: Optional[str] = Field(None, min_length=1, max_length=50, description="名")
+    last_name: Optional[str] = Field(None, min_length=1, max_length=50, description="姓")
+    display_name: Optional[str] = Field(None, min_length=1, max_length=100, description="显示名称")
+    gender: Optional[Gender] = Field(None, description="性别")
+    birth_date: Optional[date] = Field(None, description="出生日期")
+    nationality: Optional[str] = Field(None, description="国籍")
+    passport_number: Optional[str] = Field(None, description="护照号码")
+    id_number: Optional[str] = Field(None, description="身份证号码")
+    bio: Optional[str] = Field(None, max_length=500, description="个人简介")
+    avatar_url: Optional[str] = Field(None, description="头像URL")
+    
+    @property
+    def full_name(self) -> Optional[str]:
+        if self.first_name and self.last_name:
+            return f"{self.last_name} {self.first_name}"
+        return self.display_name
+    
+    @property
+    def age(self) -> Optional[int]:
+        if self.birth_date:
+            today = date.today()
+            return today.year - self.birth_date.year - ((today.month, today.day) < (self.birth_date.month, self.birth_date.day))
+        return None
+
+
+class UserPreferences(BaseModel):
+    """用户偏好设置"""
+    
+    # 基础偏好
+    language: Language = Field(Language.ZH_CN, description="语言偏好")
+    currency: Currency = Field(Currency.CNY, description="货币偏好")
+    
+    # 旅行偏好
+    travel_style: Optional[TravelStyle] = Field(None, description="旅行风格")
+    travel_frequency: Optional[TravelFrequency] = Field(None, description="旅行频率")
+    budget_range_min: Optional[float] = Field(None, ge=0, description="预算下限")
+    budget_range_max: Optional[float] = Field(None, ge=0, description="预算上限")
+    
+    # 住宿偏好
+    accommodation_types: List[AccommodationType] = Field(default_factory=list, description="住宿类型偏好")
+    accommodation_rating_min: float = Field(3.0, ge=0, le=5, description="住宿评分最低要求")
+    room_type_preference: Optional[str] = Field(None, description="房间类型偏好")
+    
+    # 交通偏好
+    transportation_types: List[TransportationType] = Field(default_factory=list, description="交通方式偏好")
+    flight_class_preference: Optional[str] = Field(None, description="航班舱位偏好")
+    
+    # 活动偏好
+    activity_types: List[ActivityType] = Field(default_factory=list, description="活动类型偏好")
+    activity_intensity: Optional[str] = Field(None, description="活动强度偏好")
+    
+    # 饮食偏好
+    dietary_restrictions: List[str] = Field(default_factory=list, description="饮食限制")
+    cuisine_preferences: List[str] = Field(default_factory=list, description="菜系偏好")
+    
+    # 目的地偏好
+    preferred_destinations: List[str] = Field(default_factory=list, description="偏好目的地")
+    avoided_destinations: List[str] = Field(default_factory=list, description="不喜欢的目的地")
+    preferred_climate: Optional[str] = Field(None, description="偏好气候")
+    
+    # 时间偏好
+    preferred_trip_duration_min: Optional[int] = Field(None, ge=1, description="偏好行程最短天数")
+    preferred_trip_duration_max: Optional[int] = Field(None, ge=1, description="偏好行程最长天数")
+    preferred_travel_months: List[int] = Field(default_factory=list, description="偏好旅行月份")
+    
+    # 同行偏好
+    typical_group_size: Optional[int] = Field(None, ge=1, description="典型团队大小")
+    travel_with_children: bool = Field(False, description="是否带儿童旅行")
+    travel_with_pets: bool = Field(False, description="是否带宠物旅行")
+    
+    # 通知偏好
+    email_notifications: bool = Field(True, description="邮件通知")
+    sms_notifications: bool = Field(False, description="短信通知")
+    push_notifications: bool = Field(True, description="推送通知")
+    price_alert_enabled: bool = Field(True, description="价格提醒")
+    
+    @validator('budget_range_max')
+    def budget_max_must_be_greater_than_min(cls, v, values):
+        if v is not None and 'budget_range_min' in values and values['budget_range_min'] is not None:
+            if v <= values['budget_range_min']:
+                raise ValueError('预算上限必须大于下限')
+        return v
 
 
 class LoyaltyTier(str, Enum):
     """忠诚度等级"""
-    BRONZE = "bronze"      # 铜牌
-    SILVER = "silver"      # 银牌
-    GOLD = "gold"          # 金牌
-    PLATINUM = "platinum"  # 白金
-    DIAMOND = "diamond"    # 钻石
+    BRONZE = "bronze"        # 青铜
+    SILVER = "silver"        # 银牌
+    GOLD = "gold"            # 金牌
+    PLATINUM = "platinum"    # 白金
+    DIAMOND = "diamond"      # 钻石
 
 
-# ==================== 基础模型 ====================
-class BaseUser(BaseModel):
-    """用户基础模型"""
+class LoyaltyProgram(BaseModel):
+    """忠诚度计划"""
+    points: int = Field(0, ge=0, description="积分")
+    tier: LoyaltyTier = Field(LoyaltyTier.BRONZE, description="等级")
+    tier_progress: float = Field(0, ge=0, le=100, description="等级进度（%）")
+    lifetime_points: int = Field(0, ge=0, description="终身积分")
+    points_expiry_date: Optional[datetime] = Field(None, description="积分过期时间")
     
-    class Config:
-        # 支持任意类型
-        arbitrary_types_allowed = True
-        # 使用枚举值而非名称
-        use_enum_values = True
-        # 验证赋值
-        validate_assignment = True
-        # JSON编码器
-        json_encoders = {
-            datetime: lambda v: v.isoformat(),
-            date: lambda v: v.isoformat(),
-            Decimal: lambda v: float(v),
-            UUID: lambda v: str(v),
-        }
+    # 统计信息
+    total_trips: int = Field(0, ge=0, description="总旅行次数")
+    total_spent: float = Field(0, ge=0, description="总消费金额")
+    countries_visited: int = Field(0, ge=0, description="访问国家数")
+    cities_visited: int = Field(0, ge=0, description="访问城市数")
+    
+    # 权益
+    free_upgrades: int = Field(0, ge=0, description="免费升级次数")
+    lounge_access: bool = Field(False, description="贵宾厅权限")
+    priority_booking: bool = Field(False, description="优先预订")
+    dedicated_support: bool = Field(False, description="专属客服")
 
 
-# ==================== 用户模型 ====================
-class User(BaseUser):
+class UserSettings(BaseModel):
+    """用户设置"""
+    
+    # 隐私设置
+    profile_public: bool = Field(False, description="公开个人资料")
+    show_travel_history: bool = Field(False, description="显示旅行历史")
+    allow_friend_requests: bool = Field(True, description="允许好友请求")
+    
+    # 通知设置
+    marketing_emails: bool = Field(False, description="营销邮件")
+    newsletter: bool = Field(True, description="新闻通讯")
+    travel_tips: bool = Field(True, description="旅行贴士")
+    
+    # 功能设置
+    auto_save_searches: bool = Field(True, description="自动保存搜索")
+    smart_recommendations: bool = Field(True, description="智能推荐")
+    location_tracking: bool = Field(False, description="位置追踪")
+    
+    # 安全设置
+    two_factor_auth: bool = Field(False, description="双因素认证")
+    login_notifications: bool = Field(True, description="登录通知")
+    password_change_date: Optional[datetime] = Field(None, description="密码修改时间")
+
+
+class User(IDMixin, TimestampMixin):
     """用户模型"""
     
-    # 基本信息
-    id: UUID = Field(default_factory=uuid4, description="用户ID")
+    # 基础信息
     username: str = Field(..., min_length=3, max_length=50, description="用户名")
-    email: EmailStr = Field(..., description="邮箱地址")
-    phone: Optional[str] = Field(None, description="手机号码")
+    email: EmailStr = Field(..., description="邮箱")
+    phone: Optional[str] = Field(None, description="手机号")
+    password_hash: str = Field(..., description="密码哈希")
     
-    # 个人信息
-    first_name: str = Field(..., min_length=1, max_length=50, description="名字")
-    last_name: str = Field(..., min_length=1, max_length=50, description="姓氏")
-    avatar_url: Optional[str] = Field(None, description="头像URL")
-    birth_date: Optional[date] = Field(None, description="出生日期")
-    gender: Optional[str] = Field(None, description="性别")
+    # 状态信息
+    role: UserRole = Field(UserRole.USER, description="用户角色")
+    status: Status = Field(Status.ACTIVE, description="账户状态")
+    is_verified: bool = Field(False, description="是否已验证")
+    is_active: bool = Field(True, description="是否激活")
     
-    # 地址信息
-    country: Optional[str] = Field(None, description="国家")
-    city: Optional[str] = Field(None, description="城市")
-    address: Optional[str] = Field(None, description="详细地址")
-    postal_code: Optional[str] = Field(None, description="邮政编码")
+    # 登录信息
+    last_login: Optional[datetime] = Field(None, description="最后登录时间")
+    login_count: int = Field(0, ge=0, description="登录次数")
+    failed_login_attempts: int = Field(0, ge=0, description="失败登录次数")
+    locked_until: Optional[datetime] = Field(None, description="锁定到期时间")
     
-    # 系统信息
-    status: UserStatus = Field(default=UserStatus.ACTIVE, description="用户状态")
-    is_verified: bool = Field(default=False, description="是否验证")
-    is_premium: bool = Field(default=False, description="是否高级用户")
+    # 关联信息
+    profile: Optional[UserProfile] = Field(None, description="用户资料")
+    preferences: UserPreferences = Field(default_factory=UserPreferences, description="用户偏好")
+    loyalty: LoyaltyProgram = Field(default_factory=LoyaltyProgram, description="忠诚度计划")
+    settings: UserSettings = Field(default_factory=UserSettings, description="用户设置")
+    contact: Optional[Contact] = Field(None, description="联系方式")
     
-    # 时间戳
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
-    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
-    last_login_at: Optional[datetime] = Field(None, description="最后登录时间")
+    # 其他信息
+    referral_code: Optional[str] = Field(None, description="推荐码")
+    referred_by: Optional[str] = Field(None, description="推荐人ID")
+    tags: List[str] = Field(default_factory=list, description="用户标签")
+    notes: Optional[str] = Field(None, description="备注")
+    
+    @validator('username')
+    def username_alphanumeric(cls, v):
+        assert v.replace('_', '').replace('-', '').isalnum(), '用户名只能包含字母、数字、下划线和连字符'
+        return v.lower()
     
     @validator('phone')
     def validate_phone(cls, v):
-        """验证手机号码"""
         if v and not v.replace('+', '').replace('-', '').replace(' ', '').isdigit():
-            raise ValueError('手机号码格式无效')
-        return v
-    
-    @validator('birth_date')
-    def validate_birth_date(cls, v):
-        """验证出生日期"""
-        if v and v > date.today():
-            raise ValueError('出生日期不能是未来日期')
+            raise ValueError('手机号格式不正确')
         return v
     
     @property
-    def full_name(self) -> str:
-        """完整姓名"""
-        return f"{self.first_name} {self.last_name}".strip()
+    def is_locked(self) -> bool:
+        """检查账户是否被锁定"""
+        if self.locked_until is None:
+            return False
+        return datetime.now() < self.locked_until
     
     @property
-    def age(self) -> Optional[int]:
-        """年龄"""
-        if not self.birth_date:
-            return None
-        today = date.today()
-        return today.year - self.birth_date.year - (
-            (today.month, today.day) < (self.birth_date.month, self.birth_date.day)
-        )
+    def display_name(self) -> str:
+        """获取显示名称"""
+        if self.profile and self.profile.display_name:
+            return self.profile.display_name
+        if self.profile and self.profile.full_name:
+            return self.profile.full_name
+        return self.username
 
 
-class UserPreferences(BaseUser):
-    """用户偏好设置"""
-    
-    id: UUID = Field(default_factory=uuid4, description="偏好ID")
-    user_id: UUID = Field(..., description="用户ID")
-    
-    # 旅行偏好
-    travel_styles: List[TravelStyle] = Field(default=[], description="旅行风格")
-    preferred_budget_min: Optional[Decimal] = Field(None, ge=0, description="最小预算")
-    preferred_budget_max: Optional[Decimal] = Field(None, ge=0, description="最大预算")
-    preferred_currency: Currency = Field(default=Currency.CNY, description="偏好货币")
-    
-    # 住宿偏好
-    preferred_hotel_star: Optional[int] = Field(None, ge=1, le=5, description="偏好酒店星级")
-    preferred_room_type: Optional[str] = Field(None, description="偏好房型")
-    smoking_preference: Optional[bool] = Field(None, description="吸烟偏好")
-    
-    # 交通偏好
-    preferred_flight_class: Optional[str] = Field(None, description="偏好航班舱位")
-    preferred_airlines: List[str] = Field(default=[], description="偏好航空公司")
-    seat_preference: Optional[str] = Field(None, description="座位偏好")
-    
-    # 餐饮偏好
-    dietary_restrictions: List[str] = Field(default=[], description="饮食限制")
-    food_preferences: List[str] = Field(default=[], description="美食偏好")
-    
-    # 活动偏好
-    activity_interests: List[str] = Field(default=[], description="活动兴趣")
-    physical_activity_level: Optional[str] = Field(None, description="体力活动水平")
-    
-    # 系统偏好
-    language: Language = Field(default=Language.ZH_CN, description="界面语言")
-    timezone: str = Field(default="Asia/Shanghai", description="时区")
-    notification_preferences: Dict[str, bool] = Field(default={}, description="通知偏好")
-    
-    # 时间戳
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
-    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
-    
-    @validator('preferred_budget_max')
-    def validate_budget_range(cls, v, values):
-        """验证预算范围"""
-        if v and 'preferred_budget_min' in values and values['preferred_budget_min']:
-            if v < values['preferred_budget_min']:
-                raise ValueError('最大预算必须大于等于最小预算')
-        return v
-
-
-class LoyaltyProgram(BaseUser):
-    """忠诚度计划"""
-    
-    id: UUID = Field(default_factory=uuid4, description="忠诚度计划ID")
-    user_id: UUID = Field(..., description="用户ID")
-    
-    # 积分信息
-    points_balance: int = Field(default=0, ge=0, description="积分余额")
-    lifetime_points: int = Field(default=0, ge=0, description="累计积分")
-    points_expiring_soon: int = Field(default=0, ge=0, description="即将过期积分")
-    
-    # 等级信息
-    current_tier: LoyaltyTier = Field(default=LoyaltyTier.BRONZE, description="当前等级")
-    tier_progress: int = Field(default=0, ge=0, le=100, description="等级进度百分比")
-    next_tier_points_needed: int = Field(default=0, ge=0, description="下一等级所需积分")
-    
-    # 统计信息
-    total_bookings: int = Field(default=0, ge=0, description="总预订数")
-    total_spending: Decimal = Field(default=Decimal('0'), ge=0, description="总消费金额")
-    
-    # 特权
-    benefits: List[str] = Field(default=[], description="享有特权")
-    discount_rate: Decimal = Field(default=Decimal('0'), ge=0, le=1, description="折扣率")
-    
-    # 时间戳
-    joined_at: datetime = Field(default_factory=datetime.utcnow, description="加入时间")
-    tier_achieved_at: Optional[datetime] = Field(None, description="达到当前等级时间")
-    last_activity_at: Optional[datetime] = Field(None, description="最后活动时间")
-
-
-class PaymentMethod(BaseUser):
-    """支付方式"""
-    
-    id: UUID = Field(default_factory=uuid4, description="支付方式ID")
-    user_id: UUID = Field(..., description="用户ID")
-    
-    # 基本信息
-    type: PaymentMethodType = Field(..., description="支付方式类型")
-    name: str = Field(..., min_length=1, max_length=100, description="支付方式名称")
-    is_default: bool = Field(default=False, description="是否默认支付方式")
-    is_active: bool = Field(default=True, description="是否启用")
-    
-    # 卡片信息（加密存储，这里仅做字段定义）
-    card_last_four: Optional[str] = Field(None, description="卡号后四位")
-    card_brand: Optional[str] = Field(None, description="卡片品牌")
-    card_type: Optional[str] = Field(None, description="卡片类型")
-    expires_at: Optional[date] = Field(None, description="到期日期")
-    
-    # 第三方支付信息
-    external_id: Optional[str] = Field(None, description="外部支付ID")
-    provider_data: Dict[str, Union[str, int, bool]] = Field(default={}, description="第三方数据")
-    
-    # 时间戳
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
-    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
-    verified_at: Optional[datetime] = Field(None, description="验证时间")
-    
-    @validator('expires_at')
-    def validate_expiry(cls, v):
-        """验证到期日期"""
-        if v and v < date.today():
-            raise ValueError('支付方式已过期')
-        return v
-
-
-# ==================== 请求/响应模型 ====================
-class UserCreate(BaseUser):
-    """创建用户请求"""
-    username: str = Field(..., min_length=3, max_length=50)
-    email: EmailStr
-    password: str = Field(..., min_length=8, max_length=128)
-    first_name: str = Field(..., min_length=1, max_length=50)
-    last_name: str = Field(..., min_length=1, max_length=50)
-    phone: Optional[str] = None
-    birth_date: Optional[date] = None
-
-
-class UserUpdate(BaseUser):
-    """更新用户请求"""
-    first_name: Optional[str] = Field(None, min_length=1, max_length=50)
-    last_name: Optional[str] = Field(None, min_length=1, max_length=50)
-    phone: Optional[str] = None
-    birth_date: Optional[date] = None
-    country: Optional[str] = None
-    city: Optional[str] = None
-    address: Optional[str] = None
-    postal_code: Optional[str] = None
-
-
-class UserResponse(BaseUser):
-    """用户响应"""
-    id: UUID
-    username: str
-    email: EmailStr
-    first_name: str
-    last_name: str
-    avatar_url: Optional[str]
-    status: UserStatus
-    is_verified: bool
-    is_premium: bool
-    created_at: datetime
-    last_login_at: Optional[datetime]
-    
-    # 不包含敏感信息
-    class Config(BaseUser.Config):
-        # 允许从ORM实例创建
-        orm_mode = True
-
-
-class UserPreferencesUpdate(BaseUser):
-    """用户偏好更新请求"""
-    travel_styles: Optional[List[TravelStyle]] = None
-    preferred_budget_min: Optional[Decimal] = Field(None, ge=0)
-    preferred_budget_max: Optional[Decimal] = Field(None, ge=0)
-    preferred_currency: Optional[Currency] = None
-    language: Optional[Language] = None
-    timezone: Optional[str] = None
-
-
-class PaymentMethodCreate(BaseUser):
-    """创建支付方式请求"""
-    type: PaymentMethodType
-    name: str = Field(..., min_length=1, max_length=100)
-    is_default: bool = Field(default=False)
-    # 实际实现中，敏感信息应通过安全渠道传输
-    card_token: Optional[str] = Field(None, description="卡片令牌")
-    external_id: Optional[str] = None
-
-
-# ==================== 批量操作模型 ====================
-class UserListResponse(BaseUser):
-    """用户列表响应"""
-    users: List[UserResponse]
-    total: int = Field(..., ge=0, description="总数量")
-    page: int = Field(..., ge=1, description="当前页码")
-    size: int = Field(..., ge=1, le=100, description="每页大小")
+class UserSession(IDMixin, TimestampMixin):
+    """用户会话"""
+    user_id: str = Field(..., description="用户ID")
+    session_token: str = Field(..., description="会话令牌")
+    refresh_token: Optional[str] = Field(None, description="刷新令牌")
+    expires_at: datetime = Field(..., description="过期时间")
+    last_activity: datetime = Field(default_factory=datetime.now, description="最后活动时间")
+    ip_address: Optional[str] = Field(None, description="IP地址")
+    user_agent: Optional[str] = Field(None, description="用户代理")
+    device_info: Optional[Dict[str, Any]] = Field(None, description="设备信息")
+    is_active: bool = Field(True, description="是否激活")
     
     @property
-    def total_pages(self) -> int:
-        """总页数"""
-        return (self.total + self.size - 1) // self.size
+    def is_expired(self) -> bool:
+        """检查会话是否过期"""
+        return datetime.now() > self.expires_at
 
 
-# ==================== 统计模型 ====================
-class UserStats(BaseUser):
-    """用户统计"""
-    total_users: int = Field(..., ge=0, description="总用户数")
-    active_users: int = Field(..., ge=0, description="活跃用户数")
-    verified_users: int = Field(..., ge=0, description="已验证用户数")
-    premium_users: int = Field(..., ge=0, description="高级用户数")
-    new_users_today: int = Field(..., ge=0, description="今日新用户")
-    new_users_this_month: int = Field(..., ge=0, description="本月新用户") 
+class UserActivity(IDMixin, TimestampMixin):
+    """用户活动记录"""
+    user_id: str = Field(..., description="用户ID")
+    activity_type: str = Field(..., description="活动类型")
+    description: str = Field(..., description="活动描述")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="元数据")
+    ip_address: Optional[str] = Field(None, description="IP地址")
+    user_agent: Optional[str] = Field(None, description="用户代理")
+
+
+class UserFeedback(IDMixin, TimestampMixin):
+    """用户反馈"""
+    user_id: str = Field(..., description="用户ID")
+    type: str = Field(..., description="反馈类型")
+    subject: str = Field(..., min_length=1, max_length=200, description="主题")
+    content: str = Field(..., min_length=1, max_length=2000, description="内容")
+    rating: Optional[int] = Field(None, ge=1, le=5, description="评分")
+    status: Status = Field(Status.PENDING, description="处理状态")
+    admin_response: Optional[str] = Field(None, description="管理员回复")
+    responded_at: Optional[datetime] = Field(None, description="回复时间")
+    responded_by: Optional[str] = Field(None, description="回复人ID") 

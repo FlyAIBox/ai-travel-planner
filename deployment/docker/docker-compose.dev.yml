@@ -169,6 +169,70 @@ services:
       - ai-travel-network
     restart: unless-stopped
 
+  # 旅行规划服务
+  planning-service:
+    build:
+      context: ../../
+      dockerfile: services/planning-service/Dockerfile
+    container_name: ai-travel-planning-dev
+    ports:
+      - "8004:8004"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
+      - LOG_LEVEL=info
+    volumes:
+      - ../../services/planning-service:/app
+      - ../../shared:/app/shared
+    depends_on:
+      - redis
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # 外部数据集成服务
+  integration-service:
+    build:
+      context: ../../
+      dockerfile: services/integration-service/Dockerfile
+    container_name: ai-travel-integration-dev
+    ports:
+      - "8005:8005"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
+      - LOG_LEVEL=info
+    volumes:
+      - ../../services/integration-service:/app
+      - ../../shared:/app/shared
+    depends_on:
+      - redis
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
+  # 前端应用
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    container_name: ai-travel-frontend-dev
+    ports:
+      - "3000:80"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - api-gateway
+    networks:
+      - ai-travel-network
+    restart: unless-stopped
+
   # API网关
   api-gateway:
     build:
@@ -184,8 +248,17 @@ services:
       - RAG_SERVICE_URL=http://rag-service:8001
       - AGENT_SERVICE_URL=http://agent-service:8002
       - USER_SERVICE_URL=http://user-service:8003
+      - PLANNING_SERVICE_URL=http://planning-service:8004
+      - INTEGRATION_SERVICE_URL=http://integration-service:8005
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-ai_travel_db}
+      - MYSQL_USER=${MYSQL_USER:-ai_travel_user}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-ai_travel_pass}
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
       - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
       - LOG_LEVEL=info
     volumes:
@@ -196,6 +269,8 @@ services:
       - rag-service
       - agent-service
       - user-service
+      - planning-service
+      - integration-service
     networks:
       - ai-travel-network
     restart: unless-stopped

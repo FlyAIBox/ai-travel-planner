@@ -1,21 +1,21 @@
 """
-旅行计划域数据模型
-包含旅行计划、目的地、预订、行程等模型
+旅行领域数据模型
+定义旅行计划、目的地、航班预订、住宿预订、活动等模型
 """
 
-from datetime import datetime, date, time
-from decimal import Decimal
+from datetime import datetime, date
+from typing import Optional, List, Dict, Any, Union
 from enum import Enum
-from typing import Dict, List, Optional, Union, Any
-from uuid import UUID, uuid4
+from decimal import Decimal
 
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import Field, validator
+from .common import (
+    BaseModel, IDMixin, TimestampMixin, Location, Money, Currency, 
+    Status, Priority, Rating, Weather, Tag
+)
 
-from .user import BaseUser, Currency
 
-
-# ==================== 枚举类型 ====================
-class PlanStatus(str, Enum):
+class TravelPlanStatus(str, Enum):
     """旅行计划状态"""
     DRAFT = "draft"              # 草稿
     PLANNING = "planning"        # 规划中
@@ -26,581 +26,514 @@ class PlanStatus(str, Enum):
     CANCELLED = "cancelled"      # 已取消
 
 
-class BookingStatus(str, Enum):
-    """预订状态"""
-    PENDING = "pending"          # 待确认
-    CONFIRMED = "confirmed"      # 已确认
-    CANCELLED = "cancelled"      # 已取消
-    REFUNDED = "refunded"        # 已退款
-    NO_SHOW = "no_show"         # 未出现
+class TripType(str, Enum):
+    """行程类型"""
+    ROUND_TRIP = "round_trip"    # 往返
+    ONE_WAY = "one_way"          # 单程
+    MULTI_CITY = "multi_city"    # 多城市
+    OPEN_JAW = "open_jaw"        # 缺口行程
 
 
 class FlightClass(str, Enum):
     """航班舱位"""
     ECONOMY = "economy"          # 经济舱
-    PREMIUM_ECONOMY = "premium_economy"  # 高端经济舱
+    PREMIUM_ECONOMY = "premium_economy"  # 超经舱
     BUSINESS = "business"        # 商务舱
-    FIRST = "first"             # 头等舱
+    FIRST = "first"              # 头等舱
 
 
-class AccommodationType(str, Enum):
-    """住宿类型"""
-    HOTEL = "hotel"             # 酒店
-    RESORT = "resort"           # 度假村
-    APARTMENT = "apartment"     # 公寓
-    HOSTEL = "hostel"          # 青年旅社
-    VILLA = "villa"            # 别墅
-    B_AND_B = "bnb"            # 民宿
-    CAMPING = "camping"        # 露营
-    OTHER = "other"            # 其他
+class AccommodationClass(str, Enum):
+    """住宿等级"""
+    BUDGET = "budget"            # 经济型
+    STANDARD = "standard"        # 标准型
+    SUPERIOR = "superior"        # 高级型
+    DELUXE = "deluxe"           # 豪华型
+    LUXURY = "luxury"           # 奢华型
 
 
-class ActivityType(str, Enum):
-    """活动类型"""
-    SIGHTSEEING = "sightseeing"    # 观光
-    ADVENTURE = "adventure"        # 冒险
-    CULTURAL = "cultural"          # 文化
-    FOOD = "food"                 # 美食
-    SHOPPING = "shopping"         # 购物
-    ENTERTAINMENT = "entertainment" # 娱乐
-    RELAXATION = "relaxation"     # 休闲
-    SPORT = "sport"               # 运动
-    BUSINESS = "business"         # 商务
-    OTHER = "other"               # 其他
+class TransportationType(str, Enum):
+    """交通方式"""
+    FLIGHT = "flight"            # 飞机
+    TRAIN = "train"              # 火车
+    BUS = "bus"                  # 巴士
+    CAR_RENTAL = "car_rental"    # 租车
+    TAXI = "taxi"                # 出租车
+    PRIVATE_CAR = "private_car"  # 私家车
+    BOAT = "boat"                # 船只
+    WALKING = "walking"          # 步行
+    BICYCLE = "bicycle"          # 自行车
 
 
-class WeatherCondition(str, Enum):
-    """天气状况"""
-    SUNNY = "sunny"           # 晴朗
-    CLOUDY = "cloudy"         # 多云
-    RAINY = "rainy"           # 雨天
-    STORMY = "stormy"         # 暴风雨
-    SNOWY = "snowy"           # 下雪
-    FOGGY = "foggy"           # 雾天
-    WINDY = "windy"           # 大风
+class ActivityCategory(str, Enum):
+    """活动分类"""
+    SIGHTSEEING = "sightseeing"      # 观光
+    CULTURAL = "cultural"            # 文化
+    ADVENTURE = "adventure"          # 探险
+    RELAXATION = "relaxation"        # 休闲
+    DINING = "dining"                # 用餐
+    SHOPPING = "shopping"            # 购物
+    ENTERTAINMENT = "entertainment"   # 娱乐
+    SPORTS = "sports"                # 运动
+    NATURE = "nature"                # 自然
+    BUSINESS = "business"            # 商务
 
 
-# ==================== 旅行计划模型 ====================
-class TravelPlan(BaseUser):
-    """旅行计划"""
-    
-    id: UUID = Field(default_factory=uuid4, description="计划ID")
-    user_id: UUID = Field(..., description="用户ID")
+class BookingStatus(str, Enum):
+    """预订状态"""
+    PENDING = "pending"          # 待确认
+    CONFIRMED = "confirmed"      # 已确认
+    PAID = "paid"               # 已付款
+    CANCELLED = "cancelled"      # 已取消
+    REFUNDED = "refunded"       # 已退款
+    COMPLETED = "completed"      # 已完成
+
+
+class Destination(IDMixin, TimestampMixin):
+    """目的地模型"""
     
     # 基本信息
-    title: str = Field(..., min_length=1, max_length=200, description="计划标题")
-    description: Optional[str] = Field(None, max_length=2000, description="计划描述")
-    status: PlanStatus = Field(default=PlanStatus.DRAFT, description="计划状态")
-    
-    # 时间信息
-    start_date: date = Field(..., description="开始日期")
-    end_date: date = Field(..., description="结束日期")
-    duration_days: Optional[int] = Field(None, ge=1, description="持续天数")
-    
-    # 预算信息
-    total_budget: Optional[Decimal] = Field(None, ge=0, description="总预算")
-    currency: Currency = Field(default=Currency.CNY, description="货币")
-    estimated_cost: Optional[Decimal] = Field(None, ge=0, description="预估费用")
-    actual_cost: Optional[Decimal] = Field(None, ge=0, description="实际费用")
-    
-    # 旅行者信息
-    traveler_count: int = Field(default=1, ge=1, le=20, description="旅行者数量")
-    adult_count: int = Field(default=1, ge=1, description="成人数量")
-    child_count: int = Field(default=0, ge=0, description="儿童数量")
-    infant_count: int = Field(default=0, ge=0, description="婴儿数量")
-    
-    # 偏好设置
-    preferences: Dict[str, Any] = Field(default={}, description="偏好设置")
-    tags: List[str] = Field(default=[], description="标签")
-    
-    # 时间戳
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
-    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
-    
-    @validator('end_date')
-    def validate_date_range(cls, v, values):
-        """验证日期范围"""
-        if 'start_date' in values and v < values['start_date']:
-            raise ValueError('结束日期必须大于等于开始日期')
-        return v
-    
-    @validator('duration_days', always=True)
-    def calculate_duration(cls, v, values):
-        """计算持续天数"""
-        if 'start_date' in values and 'end_date' in values:
-            delta = values['end_date'] - values['start_date']
-            return delta.days + 1
-        return v
-    
-    @validator('adult_count')
-    def validate_traveler_count(cls, v, values):
-        """验证旅行者数量"""
-        if 'traveler_count' in values and v > values['traveler_count']:
-            raise ValueError('成人数量不能超过总旅行者数量')
-        return v
-
-
-class Destination(BaseUser):
-    """目的地"""
-    
-    id: UUID = Field(default_factory=uuid4, description="目的地ID")
-    plan_id: UUID = Field(..., description="计划ID")
-    
-    # 位置信息
     name: str = Field(..., min_length=1, max_length=200, description="目的地名称")
-    country: str = Field(..., description="国家")
-    city: str = Field(..., description="城市")
+    name_en: Optional[str] = Field(None, description="英文名称")
+    description: Optional[str] = Field(None, max_length=2000, description="描述")
+    
+    # 地理位置
+    location: Location = Field(..., description="地理位置")
+    timezone: str = Field(..., description="时区")
+    country_code: str = Field(..., min_length=2, max_length=3, description="国家代码")
     region: Optional[str] = Field(None, description="地区")
     
-    # 地理坐标
-    latitude: Optional[float] = Field(None, ge=-90, le=90, description="纬度")
-    longitude: Optional[float] = Field(None, ge=-180, le=180, description="经度")
-    timezone: Optional[str] = Field(None, description="时区")
+    # 分类标签
+    tags: List[Tag] = Field(default_factory=list, description="标签")
+    categories: List[str] = Field(default_factory=list, description="分类")
     
-    # 访问信息
-    arrival_date: date = Field(..., description="到达日期")
-    departure_date: date = Field(..., description="离开日期")
-    stay_duration: Optional[int] = Field(None, ge=1, description="停留天数")
+    # 评价信息
+    rating: Optional[Rating] = Field(None, description="评分")
+    popularity_score: float = Field(0, ge=0, le=100, description="热门度评分")
     
-    # 描述信息
-    description: Optional[str] = Field(None, max_length=1000, description="目的地描述")
-    highlights: List[str] = Field(default=[], description="亮点")
-    notes: Optional[str] = Field(None, max_length=500, description="备注")
+    # 最佳旅行时间
+    best_months: List[int] = Field(default_factory=list, description="最佳旅行月份")
+    peak_season: Optional[str] = Field(None, description="旺季")
     
-    # 排序
-    order: int = Field(default=0, ge=0, description="访问顺序")
+    # 成本信息
+    cost_level: int = Field(3, ge=1, le=5, description="消费水平(1-5)")
+    avg_daily_cost: Optional[Money] = Field(None, description="平均日消费")
     
-    @validator('departure_date')
-    def validate_stay_dates(cls, v, values):
-        """验证停留日期"""
-        if 'arrival_date' in values and v < values['arrival_date']:
-            raise ValueError('离开日期必须大于等于到达日期')
-        return v
+    # 媒体资源
+    images: List[str] = Field(default_factory=list, description="图片URL列表")
+    videos: List[str] = Field(default_factory=list, description="视频URL列表")
+    
+    # 元数据
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    is_active: bool = Field(True, description="是否激活")
 
 
-class TravelerInfo(BaseUser):
-    """旅行者信息"""
-    
-    id: UUID = Field(default_factory=uuid4, description="旅行者ID")
-    plan_id: UUID = Field(..., description="计划ID")
+class Activity(IDMixin, TimestampMixin):
+    """活动模型"""
     
     # 基本信息
-    first_name: str = Field(..., min_length=1, max_length=50, description="名字")
-    last_name: str = Field(..., min_length=1, max_length=50, description="姓氏")
-    birth_date: date = Field(..., description="出生日期")
-    gender: Optional[str] = Field(None, description="性别")
+    name: str = Field(..., min_length=1, max_length=200, description="活动名称")
+    description: Optional[str] = Field(None, max_length=2000, description="活动描述")
+    category: ActivityCategory = Field(..., description="活动分类")
     
-    # 身份信息
-    passport_number: Optional[str] = Field(None, description="护照号码")
-    passport_expiry: Optional[date] = Field(None, description="护照到期日")
-    nationality: Optional[str] = Field(None, description="国籍")
+    # 位置信息
+    destination_id: str = Field(..., description="目的地ID")
+    location: Optional[Location] = Field(None, description="具体位置")
+    address: Optional[str] = Field(None, description="地址")
     
-    # 联系信息
-    email: Optional[str] = Field(None, description="邮箱")
-    phone: Optional[str] = Field(None, description="电话")
+    # 时间信息
+    duration_hours: float = Field(..., ge=0, description="持续时间（小时）")
+    opening_hours: Optional[str] = Field(None, description="开放时间")
+    available_dates: Optional[List[date]] = Field(None, description="可预订日期")
     
-    # 特殊需求
-    dietary_restrictions: List[str] = Field(default=[], description="饮食限制")
-    medical_conditions: List[str] = Field(default=[], description="医疗状况")
-    special_requests: List[str] = Field(default=[], description="特殊要求")
+    # 价格信息
+    price: Optional[Money] = Field(None, description="价格")
+    price_per_person: Optional[Money] = Field(None, description="每人价格")
+    is_free: bool = Field(False, description="是否免费")
     
-    # 关系
-    relationship_to_primary: Optional[str] = Field(None, description="与主要旅行者关系")
-    is_primary: bool = Field(default=False, description="是否主要旅行者")
+    # 要求和限制
+    min_age: Optional[int] = Field(None, ge=0, description="最小年龄")
+    max_participants: Optional[int] = Field(None, ge=1, description="最大参与人数")
+    difficulty_level: int = Field(1, ge=1, le=5, description="难度等级")
+    physical_requirement: Optional[str] = Field(None, description="体力要求")
     
-    @property
-    def full_name(self) -> str:
-        """完整姓名"""
-        return f"{self.first_name} {self.last_name}".strip()
+    # 评价信息
+    rating: Optional[Rating] = Field(None, description="评分")
     
-    @property
-    def age(self) -> int:
-        """年龄"""
-        today = date.today()
-        return today.year - self.birth_date.year - (
-            (today.month, today.day) < (self.birth_date.month, self.birth_date.day)
-        )
-
-
-# ==================== 预算模型 ====================
-class BudgetBreakdown(BaseUser):
-    """预算明细"""
+    # 标签和分类
+    tags: List[str] = Field(default_factory=list, description="标签")
     
-    id: UUID = Field(default_factory=uuid4, description="预算明细ID")
-    plan_id: UUID = Field(..., description="计划ID")
-    
-    # 预算分类
-    accommodation_budget: Decimal = Field(default=Decimal('0'), ge=0, description="住宿预算")
-    transportation_budget: Decimal = Field(default=Decimal('0'), ge=0, description="交通预算")
-    food_budget: Decimal = Field(default=Decimal('0'), ge=0, description="餐饮预算")
-    activity_budget: Decimal = Field(default=Decimal('0'), ge=0, description="活动预算")
-    shopping_budget: Decimal = Field(default=Decimal('0'), ge=0, description="购物预算")
-    emergency_budget: Decimal = Field(default=Decimal('0'), ge=0, description="应急预算")
-    other_budget: Decimal = Field(default=Decimal('0'), ge=0, description="其他预算")
-    
-    # 实际花费
-    accommodation_spent: Decimal = Field(default=Decimal('0'), ge=0, description="住宿花费")
-    transportation_spent: Decimal = Field(default=Decimal('0'), ge=0, description="交通花费")
-    food_spent: Decimal = Field(default=Decimal('0'), ge=0, description="餐饮花费")
-    activity_spent: Decimal = Field(default=Decimal('0'), ge=0, description="活动花费")
-    shopping_spent: Decimal = Field(default=Decimal('0'), ge=0, description="购物花费")
-    emergency_spent: Decimal = Field(default=Decimal('0'), ge=0, description="应急花费")
-    other_spent: Decimal = Field(default=Decimal('0'), ge=0, description="其他花费")
-    
-    currency: Currency = Field(default=Currency.CNY, description="货币")
-    
-    @property
-    def total_budget(self) -> Decimal:
-        """总预算"""
-        return (self.accommodation_budget + self.transportation_budget + 
-                self.food_budget + self.activity_budget + self.shopping_budget +
-                self.emergency_budget + self.other_budget)
-    
-    @property
-    def total_spent(self) -> Decimal:
-        """总花费"""
-        return (self.accommodation_spent + self.transportation_spent +
-                self.food_spent + self.activity_spent + self.shopping_spent +
-                self.emergency_spent + self.other_spent)
-    
-    @property
-    def remaining_budget(self) -> Decimal:
-        """剩余预算"""
-        return self.total_budget - self.total_spent
-
-
-# ==================== 航班预订模型 ====================
-class FlightBooking(BaseUser):
-    """航班预订"""
-    
-    id: UUID = Field(default_factory=uuid4, description="航班预订ID")
-    plan_id: UUID = Field(..., description="计划ID")
+    # 媒体资源
+    images: List[str] = Field(default_factory=list, description="图片URL列表")
     
     # 预订信息
-    booking_reference: str = Field(..., description="预订参考号")
-    status: BookingStatus = Field(default=BookingStatus.PENDING, description="预订状态")
+    booking_required: bool = Field(False, description="是否需要预订")
+    booking_url: Optional[str] = Field(None, description="预订链接")
     
-    # 航班信息
+    # 元数据
+    provider: Optional[str] = Field(None, description="服务提供商")
+    external_id: Optional[str] = Field(None, description="外部ID")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    is_active: bool = Field(True, description="是否激活")
+
+
+class Transportation(IDMixin, TimestampMixin):
+    """交通模型"""
+    
+    # 基本信息
+    type: TransportationType = Field(..., description="交通方式")
+    name: Optional[str] = Field(None, description="交通工具名称")
+    
+    # 路线信息
+    from_location: Location = Field(..., description="出发地")
+    to_location: Location = Field(..., description="目的地")
+    from_name: str = Field(..., description="出发地名称")
+    to_name: str = Field(..., description="目的地名称")
+    
+    # 时间信息
+    departure_time: datetime = Field(..., description="出发时间")
+    arrival_time: datetime = Field(..., description="到达时间")
+    duration_minutes: int = Field(..., ge=0, description="持续时间（分钟）")
+    
+    # 价格信息
+    price: Money = Field(..., description="价格")
+    currency: Currency = Field(..., description="货币")
+    
+    # 运营商信息
+    operator: Optional[str] = Field(None, description="运营商")
+    vehicle_number: Optional[str] = Field(None, description="车次/航班号")
+    
+    # 座位/舱位信息
+    class_type: Optional[str] = Field(None, description="舱位/座位类型")
+    seat_number: Optional[str] = Field(None, description="座位号")
+    
+    # 预订信息
+    booking_reference: Optional[str] = Field(None, description="预订参考号")
+    booking_status: BookingStatus = Field(BookingStatus.PENDING, description="预订状态")
+    
+    # 元数据
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    
+    @property
+    def duration_hours(self) -> float:
+        """持续时间（小时）"""
+        return self.duration_minutes / 60.0
+
+
+class FlightBooking(IDMixin, TimestampMixin):
+    """航班预订模型"""
+    
+    # 基本信息
     airline: str = Field(..., description="航空公司")
     flight_number: str = Field(..., description="航班号")
     aircraft_type: Optional[str] = Field(None, description="机型")
     
-    # 出发信息
-    departure_airport: str = Field(..., description="出发机场")
+    # 路线信息
+    departure_airport: str = Field(..., description="出发机场代码")
+    arrival_airport: str = Field(..., description="到达机场代码")
     departure_city: str = Field(..., description="出发城市")
-    departure_datetime: datetime = Field(..., description="出发时间")
-    departure_terminal: Optional[str] = Field(None, description="出发航站楼")
-    departure_gate: Optional[str] = Field(None, description="出发登机口")
-    
-    # 到达信息
-    arrival_airport: str = Field(..., description="到达机场")
     arrival_city: str = Field(..., description="到达城市")
-    arrival_datetime: datetime = Field(..., description="到达时间")
-    arrival_terminal: Optional[str] = Field(None, description="到达航站楼")
-    arrival_gate: Optional[str] = Field(None, description="到达登机口")
-    
-    # 舱位和座位
-    flight_class: FlightClass = Field(..., description="舱位等级")
-    seat_numbers: List[str] = Field(default=[], description="座位号")
-    
-    # 价格信息
-    base_price: Decimal = Field(..., ge=0, description="基础价格")
-    taxes_and_fees: Decimal = Field(default=Decimal('0'), ge=0, description="税费")
-    total_price: Decimal = Field(..., ge=0, description="总价格")
-    currency: Currency = Field(default=Currency.CNY, description="货币")
-    
-    # 行李信息
-    checked_baggage_allowance: Optional[str] = Field(None, description="托运行李额度")
-    carry_on_allowance: Optional[str] = Field(None, description="随身行李额度")
-    
-    # 时间戳
-    booked_at: datetime = Field(default_factory=datetime.utcnow, description="预订时间")
-    check_in_opens_at: Optional[datetime] = Field(None, description="值机开放时间")
-    
-    @property
-    def flight_duration(self) -> int:
-        """航班时长（分钟）"""
-        delta = self.arrival_datetime - self.departure_datetime
-        return int(delta.total_seconds() / 60)
-
-
-class Layover(BaseUser):
-    """中转"""
-    
-    id: UUID = Field(default_factory=uuid4, description="中转ID")
-    flight_booking_id: UUID = Field(..., description="航班预订ID")
-    
-    # 中转机场信息
-    airport: str = Field(..., description="中转机场")
-    city: str = Field(..., description="中转城市")
-    country: str = Field(..., description="中转国家")
     
     # 时间信息
-    arrival_datetime: datetime = Field(..., description="到达时间")
-    departure_datetime: datetime = Field(..., description="离开时间")
-    duration_minutes: int = Field(..., ge=0, description="中转时长（分钟）")
+    departure_time: datetime = Field(..., description="出发时间")
+    arrival_time: datetime = Field(..., description="到达时间")
+    flight_duration: int = Field(..., ge=0, description="飞行时间（分钟）")
     
-    # 是否需要签证
-    visa_required: bool = Field(default=False, description="是否需要签证")
-    can_exit_airport: bool = Field(default=True, description="是否可以出机场")
-
-
-# ==================== 住宿预订模型 ====================
-class AccommodationBooking(BaseUser):
-    """住宿预订"""
+    # 舱位信息
+    cabin_class: FlightClass = Field(..., description="舱位等级")
+    seat_number: Optional[str] = Field(None, description="座位号")
+    baggage_allowance: Optional[str] = Field(None, description="行李额度")
     
-    id: UUID = Field(default_factory=uuid4, description="住宿预订ID")
-    plan_id: UUID = Field(..., description="计划ID")
-    destination_id: Optional[UUID] = Field(None, description="目的地ID")
+    # 价格信息
+    base_price: Money = Field(..., description="基础价格")
+    taxes_and_fees: Money = Field(..., description="税费")
+    total_price: Money = Field(..., description="总价格")
+    
+    # 乘客信息
+    passengers: List[Dict[str, Any]] = Field(default_factory=list, description="乘客信息")
     
     # 预订信息
     booking_reference: str = Field(..., description="预订参考号")
-    status: BookingStatus = Field(default=BookingStatus.PENDING, description="预订状态")
+    ticket_number: Optional[str] = Field(None, description="票号")
+    status: BookingStatus = Field(BookingStatus.PENDING, description="预订状态")
     
-    # 住宿信息
-    accommodation_type: AccommodationType = Field(..., description="住宿类型")
-    name: str = Field(..., description="住宿名称")
-    brand: Optional[str] = Field(None, description="品牌")
-    star_rating: Optional[int] = Field(None, ge=1, le=5, description="星级")
+    # 服务信息
+    meal_preference: Optional[str] = Field(None, description="餐食偏好")
+    special_requests: List[str] = Field(default_factory=list, description="特殊要求")
     
-    # 地址信息
-    address: str = Field(..., description="地址")
+    # 元数据
+    booking_source: Optional[str] = Field(None, description="预订来源")
+    external_booking_id: Optional[str] = Field(None, description="外部预订ID")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    
+    @property
+    def flight_duration_hours(self) -> float:
+        """飞行时间（小时）"""
+        return self.flight_duration / 60.0
+
+
+class AccommodationBooking(IDMixin, TimestampMixin):
+    """住宿预订模型"""
+    
+    # 基本信息
+    hotel_name: str = Field(..., description="酒店名称")
+    hotel_chain: Optional[str] = Field(None, description="酒店集团")
+    hotel_category: AccommodationClass = Field(..., description="酒店等级")
+    
+    # 位置信息
+    location: Location = Field(..., description="酒店位置")
+    address: str = Field(..., description="酒店地址")
     city: str = Field(..., description="城市")
     country: str = Field(..., description="国家")
-    postal_code: Optional[str] = Field(None, description="邮政编码")
-    latitude: Optional[float] = Field(None, ge=-90, le=90, description="纬度")
-    longitude: Optional[float] = Field(None, ge=-180, le=180, description="经度")
     
-    # 入住信息
+    # 时间信息
     check_in_date: date = Field(..., description="入住日期")
     check_out_date: date = Field(..., description="退房日期")
     nights: int = Field(..., ge=1, description="住宿夜数")
     
     # 房间信息
-    room_type: str = Field(..., description="房型")
-    room_count: int = Field(default=1, ge=1, description="房间数量")
-    guest_count: int = Field(..., ge=1, description="客人数量")
+    room_type: str = Field(..., description="房间类型")
+    room_count: int = Field(1, ge=1, description="房间数量")
+    guests: int = Field(1, ge=1, description="客人数量")
     
     # 价格信息
-    nightly_rate: Decimal = Field(..., ge=0, description="每晚价格")
-    total_price: Decimal = Field(..., ge=0, description="总价格")
-    taxes_and_fees: Decimal = Field(default=Decimal('0'), ge=0, description="税费")
-    currency: Currency = Field(default=Currency.CNY, description="货币")
-    
-    # 设施和服务
-    amenities: List[str] = Field(default=[], description="设施")
-    included_services: List[str] = Field(default=[], description="包含服务")
-    
-    # 联系信息
-    phone: Optional[str] = Field(None, description="电话")
-    email: Optional[str] = Field(None, description="邮箱")
-    website: Optional[str] = Field(None, description="网站")
-    
-    # 特殊要求
-    special_requests: List[str] = Field(default=[], description="特殊要求")
-    
-    # 时间戳
-    booked_at: datetime = Field(default_factory=datetime.utcnow, description="预订时间")
-    
-    @validator('check_out_date')
-    def validate_stay_dates(cls, v, values):
-        """验证住宿日期"""
-        if 'check_in_date' in values and v <= values['check_in_date']:
-            raise ValueError('退房日期必须大于入住日期')
-        return v
-    
-    @validator('nights', always=True)
-    def calculate_nights(cls, v, values):
-        """计算住宿夜数"""
-        if 'check_in_date' in values and 'check_out_date' in values:
-            delta = values['check_out_date'] - values['check_in_date']
-            return delta.days
-        return v
-
-
-# ==================== 行程安排模型 ====================
-class ItineraryDay(BaseUser):
-    """每日行程"""
-    
-    id: UUID = Field(default_factory=uuid4, description="每日行程ID")
-    plan_id: UUID = Field(..., description="计划ID")
-    destination_id: Optional[UUID] = Field(None, description="目的地ID")
-    
-    # 日期信息
-    date: date = Field(..., description="日期")
-    day_number: int = Field(..., ge=1, description="第几天")
-    
-    # 基本信息
-    title: Optional[str] = Field(None, max_length=200, description="标题")
-    description: Optional[str] = Field(None, max_length=1000, description="描述")
-    notes: Optional[str] = Field(None, max_length=500, description="备注")
-    
-    # 预算
-    planned_budget: Decimal = Field(default=Decimal('0'), ge=0, description="计划预算")
-    actual_spending: Decimal = Field(default=Decimal('0'), ge=0, description="实际花费")
-    
-    # 天气信息
-    weather_condition: Optional[WeatherCondition] = Field(None, description="天气状况")
-    temperature_high: Optional[int] = Field(None, description="最高温度")
-    temperature_low: Optional[int] = Field(None, description="最低温度")
-    
-    # 完成状态
-    is_completed: bool = Field(default=False, description="是否完成")
-    completion_notes: Optional[str] = Field(None, max_length=500, description="完成备注")
-
-
-class ItineraryActivity(BaseUser):
-    """行程活动"""
-    
-    id: UUID = Field(default_factory=uuid4, description="活动ID")
-    itinerary_day_id: UUID = Field(..., description="每日行程ID")
-    
-    # 基本信息
-    title: str = Field(..., min_length=1, max_length=200, description="活动标题")
-    description: Optional[str] = Field(None, max_length=1000, description="活动描述")
-    activity_type: ActivityType = Field(..., description="活动类型")
-    
-    # 时间信息
-    start_time: Optional[time] = Field(None, description="开始时间")
-    end_time: Optional[time] = Field(None, description="结束时间")
-    duration_minutes: Optional[int] = Field(None, ge=0, description="时长（分钟）")
-    
-    # 位置信息
-    location_name: Optional[str] = Field(None, description="位置名称")
-    address: Optional[str] = Field(None, description="地址")
-    latitude: Optional[float] = Field(None, ge=-90, le=90, description="纬度")
-    longitude: Optional[float] = Field(None, ge=-180, le=180, description="经度")
-    
-    # 费用信息
-    estimated_cost: Decimal = Field(default=Decimal('0'), ge=0, description="预估费用")
-    actual_cost: Decimal = Field(default=Decimal('0'), ge=0, description="实际费用")
-    currency: Currency = Field(default=Currency.CNY, description="货币")
-    
-    # 优先级和状态
-    priority: int = Field(default=0, ge=0, le=10, description="优先级")
-    order: int = Field(default=0, ge=0, description="顺序")
-    is_confirmed: bool = Field(default=False, description="是否确认")
-    is_completed: bool = Field(default=False, description="是否完成")
-    
-    # 预订信息
-    booking_required: bool = Field(default=False, description="是否需要预订")
-    booking_url: Optional[str] = Field(None, description="预订链接")
-    contact_info: Optional[str] = Field(None, description="联系信息")
-    
-    # 标签和备注
-    tags: List[str] = Field(default=[], description="标签")
-    notes: Optional[str] = Field(None, max_length=500, description="备注")
-
-
-class ActivityBooking(BaseUser):
-    """活动预订"""
-    
-    id: UUID = Field(default_factory=uuid4, description="活动预订ID")
-    activity_id: UUID = Field(..., description="活动ID")
+    rate_per_night: Money = Field(..., description="每晚价格")
+    total_rate: Money = Field(..., description="总房费")
+    taxes_and_fees: Money = Field(..., description="税费")
+    total_price: Money = Field(..., description="总价格")
     
     # 预订信息
     booking_reference: str = Field(..., description="预订参考号")
-    status: BookingStatus = Field(default=BookingStatus.PENDING, description="预订状态")
+    confirmation_number: Optional[str] = Field(None, description="确认号")
+    status: BookingStatus = Field(BookingStatus.PENDING, description="预订状态")
     
-    # 服务提供商
-    provider_name: str = Field(..., description="服务提供商")
-    provider_contact: Optional[str] = Field(None, description="联系方式")
+    # 客人信息
+    guest_details: List[Dict[str, Any]] = Field(default_factory=list, description="客人详情")
+    
+    # 服务和设施
+    included_services: List[str] = Field(default_factory=list, description="包含服务")
+    amenities: List[str] = Field(default_factory=list, description="设施")
+    breakfast_included: bool = Field(False, description="是否含早餐")
+    wifi_included: bool = Field(True, description="是否含WiFi")
+    parking_included: bool = Field(False, description="是否含停车")
+    
+    # 政策信息
+    cancellation_policy: Optional[str] = Field(None, description="取消政策")
+    check_in_time: Optional[str] = Field(None, description="入住时间")
+    check_out_time: Optional[str] = Field(None, description="退房时间")
+    
+    # 特殊要求
+    special_requests: List[str] = Field(default_factory=list, description="特殊要求")
+    
+    # 评价信息
+    hotel_rating: Optional[Rating] = Field(None, description="酒店评分")
+    
+    # 元数据
+    booking_source: Optional[str] = Field(None, description="预订来源")
+    external_booking_id: Optional[str] = Field(None, description="外部预订ID")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    
+    @validator('check_out_date')
+    def check_out_after_check_in(cls, v, values):
+        if 'check_in_date' in values and v <= values['check_in_date']:
+            raise ValueError('退房日期必须晚于入住日期')
+        return v
+
+
+class Budget(BaseModel):
+    """预算模型"""
+    
+    # 总预算
+    total_budget: Money = Field(..., description="总预算")
+    currency: Currency = Field(..., description="货币")
+    
+    # 分类预算
+    accommodation_budget: Optional[Money] = Field(None, description="住宿预算")
+    transportation_budget: Optional[Money] = Field(None, description="交通预算")
+    food_budget: Optional[Money] = Field(None, description="餐饮预算")
+    activity_budget: Optional[Money] = Field(None, description="活动预算")
+    shopping_budget: Optional[Money] = Field(None, description="购物预算")
+    emergency_budget: Optional[Money] = Field(None, description="应急预算")
+    
+    # 实际支出
+    actual_spent: Money = Field(Money(amount=0, currency=Currency.CNY), description="实际支出")
+    
+    # 统计信息
+    remaining_budget: Optional[Money] = Field(None, description="剩余预算")
+    budget_utilization: float = Field(0, ge=0, le=100, description="预算使用率（%）")
+    
+    @property
+    def is_over_budget(self) -> bool:
+        """是否超预算"""
+        return self.actual_spent.amount > self.total_budget.amount
+
+
+class Itinerary(IDMixin, TimestampMixin):
+    """行程安排模型"""
+    
+    # 基本信息
+    date: date = Field(..., description="日期")
+    day_number: int = Field(..., ge=1, description="第几天")
+    title: Optional[str] = Field(None, description="行程标题")
+    description: Optional[str] = Field(None, description="行程描述")
+    
+    # 位置信息
+    destination_id: str = Field(..., description="目的地ID")
+    city: str = Field(..., description="城市")
+    
+    # 活动列表
+    activities: List[str] = Field(default_factory=list, description="活动ID列表")
+    
+    # 交通安排
+    transportations: List[str] = Field(default_factory=list, description="交通ID列表")
+    
+    # 住宿信息
+    accommodation_id: Optional[str] = Field(None, description="住宿ID")
+    
+    # 时间安排
+    start_time: Optional[datetime] = Field(None, description="开始时间")
+    end_time: Optional[datetime] = Field(None, description="结束时间")
+    
+    # 预算信息
+    estimated_cost: Optional[Money] = Field(None, description="预估费用")
+    actual_cost: Optional[Money] = Field(None, description="实际费用")
+    
+    # 天气信息
+    weather: Optional[Weather] = Field(None, description="天气信息")
+    
+    # 备注和提醒
+    notes: Optional[str] = Field(None, description="备注")
+    reminders: List[str] = Field(default_factory=list, description="提醒事项")
+    
+    # 元数据
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+
+
+class TravelPlan(IDMixin, TimestampMixin):
+    """旅行计划模型"""
+    
+    # 基本信息
+    title: str = Field(..., min_length=1, max_length=200, description="计划标题")
+    description: Optional[str] = Field(None, max_length=2000, description="计划描述")
+    user_id: str = Field(..., description="用户ID")
+    
+    # 行程信息
+    trip_type: TripType = Field(..., description="行程类型")
+    start_date: date = Field(..., description="开始日期")
+    end_date: date = Field(..., description="结束日期")
+    duration_days: int = Field(..., ge=1, description="行程天数")
     
     # 参与者信息
-    participant_count: int = Field(..., ge=1, description="参与者数量")
-    participant_names: List[str] = Field(default=[], description="参与者姓名")
+    travelers_count: int = Field(1, ge=1, description="旅行者数量")
+    adults: int = Field(1, ge=1, description="成人数量")
+    children: int = Field(0, ge=0, description="儿童数量")
+    infants: int = Field(0, ge=0, description="婴儿数量")
     
-    # 价格信息
-    unit_price: Decimal = Field(..., ge=0, description="单价")
-    total_price: Decimal = Field(..., ge=0, description="总价")
-    currency: Currency = Field(default=Currency.CNY, description="货币")
+    # 目的地信息
+    destinations: List[str] = Field(..., min_items=1, description="目的地ID列表")
+    primary_destination: str = Field(..., description="主要目的地ID")
     
-    # 时间信息
-    booking_datetime: datetime = Field(..., description="预订时间")
-    activity_datetime: datetime = Field(..., description="活动时间")
+    # 预算信息
+    budget: Budget = Field(..., description="预算信息")
     
-    # 取消政策
-    cancellation_policy: Optional[str] = Field(None, description="取消政策")
-    cancellable_until: Optional[datetime] = Field(None, description="可取消截止时间")
+    # 预订信息
+    flight_bookings: List[str] = Field(default_factory=list, description="航班预订ID列表")
+    accommodation_bookings: List[str] = Field(default_factory=list, description="住宿预订ID列表")
+    activity_bookings: List[str] = Field(default_factory=list, description="活动预订ID列表")
+    
+    # 行程安排
+    itineraries: List[str] = Field(default_factory=list, description="行程安排ID列表")
+    
+    # 状态信息
+    status: TravelPlanStatus = Field(TravelPlanStatus.DRAFT, description="计划状态")
+    priority: Priority = Field(Priority.MEDIUM, description="优先级")
+    
+    # 分享和权限
+    is_public: bool = Field(False, description="是否公开")
+    shared_with: List[str] = Field(default_factory=list, description="分享用户ID列表")
+    
+    # 标签和分类
+    tags: List[str] = Field(default_factory=list, description="标签")
+    categories: List[str] = Field(default_factory=list, description="分类")
+    
+    # 偏好设置
+    travel_style: Optional[str] = Field(None, description="旅行风格")
+    accommodation_preference: Optional[str] = Field(None, description="住宿偏好")
+    transportation_preference: Optional[str] = Field(None, description="交通偏好")
+    
+    # 特殊要求
+    special_requirements: List[str] = Field(default_factory=list, description="特殊要求")
+    dietary_requirements: List[str] = Field(default_factory=list, description="饮食要求")
+    accessibility_needs: List[str] = Field(default_factory=list, description="无障碍需求")
+    
+    # 联系信息
+    emergency_contact: Optional[Dict[str, str]] = Field(None, description="紧急联系人")
+    
+    # 文档和资料
+    documents: List[str] = Field(default_factory=list, description="相关文档")
+    
+    # 评价和反馈
+    rating: Optional[Rating] = Field(None, description="计划评分")
+    reviews: List[str] = Field(default_factory=list, description="评价ID列表")
+    
+    # 元数据
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    
+    @validator('end_date')
+    def end_date_after_start_date(cls, v, values):
+        if 'start_date' in values and v <= values['start_date']:
+            raise ValueError('结束日期必须晚于开始日期')
+        return v
+    
+    @validator('duration_days', pre=True, always=True)
+    def calculate_duration(cls, v, values):
+        if 'start_date' in values and 'end_date' in values:
+            return (values['end_date'] - values['start_date']).days + 1
+        return v
+    
+    @property
+    def is_past(self) -> bool:
+        """是否已过期"""
+        return self.end_date < date.today()
+    
+    @property
+    def is_current(self) -> bool:
+        """是否正在进行"""
+        today = date.today()
+        return self.start_date <= today <= self.end_date
+    
+    @property
+    def days_until_trip(self) -> int:
+        """距离出行天数"""
+        if self.is_past:
+            return -1
+        return (self.start_date - date.today()).days
 
 
-# ==================== 天气信息模型 ====================
-class WeatherInfo(BaseUser):
-    """天气信息"""
+class TravelDocument(IDMixin, TimestampMixin):
+    """旅行文档模型"""
     
-    id: UUID = Field(default_factory=uuid4, description="天气信息ID")
-    destination_id: UUID = Field(..., description="目的地ID")
+    # 基本信息
+    travel_plan_id: str = Field(..., description="旅行计划ID")
+    document_type: str = Field(..., description="文档类型")
+    title: str = Field(..., description="文档标题")
     
-    # 日期和时间
-    date: date = Field(..., description="日期")
-    forecast_datetime: datetime = Field(..., description="预报时间")
+    # 文件信息
+    file_url: str = Field(..., description="文件URL")
+    file_name: str = Field(..., description="文件名")
+    file_size: int = Field(..., ge=0, description="文件大小")
+    file_type: str = Field(..., description="文件类型")
     
-    # 温度信息
-    temperature_high: int = Field(..., description="最高温度")
-    temperature_low: int = Field(..., description="最低温度")
-    feels_like: Optional[int] = Field(None, description="体感温度")
+    # 文档内容
+    content: Optional[str] = Field(None, description="文档内容")
+    summary: Optional[str] = Field(None, description="摘要")
     
-    # 天气状况
-    condition: WeatherCondition = Field(..., description="天气状况")
-    description: str = Field(..., description="天气描述")
+    # 分类和标签
+    category: str = Field(..., description="分类")
+    tags: List[str] = Field(default_factory=list, description="标签")
     
-    # 其他天气数据
-    humidity: Optional[int] = Field(None, ge=0, le=100, description="湿度百分比")
-    wind_speed: Optional[float] = Field(None, ge=0, description="风速")
-    wind_direction: Optional[str] = Field(None, description="风向")
-    precipitation_chance: Optional[int] = Field(None, ge=0, le=100, description="降水概率")
-    uv_index: Optional[int] = Field(None, ge=0, le=11, description="紫外线指数")
+    # 权限设置
+    is_private: bool = Field(True, description="是否私密")
+    access_users: List[str] = Field(default_factory=list, description="访问用户列表")
     
-    # 数据来源
-    source: str = Field(..., description="数据来源")
-    last_updated: datetime = Field(default_factory=datetime.utcnow, description="最后更新时间")
-
-
-# ==================== 请求/响应模型 ====================
-class TravelPlanCreate(BaseUser):
-    """创建旅行计划请求"""
-    title: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = Field(None, max_length=2000)
-    start_date: date
-    end_date: date
-    total_budget: Optional[Decimal] = Field(None, ge=0)
-    currency: Currency = Field(default=Currency.CNY)
-    traveler_count: int = Field(default=1, ge=1, le=20)
-    adult_count: int = Field(default=1, ge=1)
-    child_count: int = Field(default=0, ge=0)
-    infant_count: int = Field(default=0, ge=0)
-    preferences: Dict[str, Any] = Field(default={})
-    tags: List[str] = Field(default=[])
-
-
-class TravelPlanUpdate(BaseUser):
-    """更新旅行计划请求"""
-    title: Optional[str] = Field(None, min_length=1, max_length=200)
-    description: Optional[str] = Field(None, max_length=2000)
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    total_budget: Optional[Decimal] = Field(None, ge=0)
-    status: Optional[PlanStatus] = None
-    preferences: Optional[Dict[str, Any]] = None
-    tags: Optional[List[str]] = None
-
-
-class TravelPlanResponse(BaseUser):
-    """旅行计划响应"""
-    id: UUID
-    title: str
-    description: Optional[str]
-    status: PlanStatus
-    start_date: date
-    end_date: date
-    duration_days: int
-    total_budget: Optional[Decimal]
-    currency: Currency
-    estimated_cost: Optional[Decimal]
-    actual_cost: Optional[Decimal]
-    traveler_count: int
-    created_at: datetime
-    updated_at: datetime
-    
-    class Config(BaseUser.Config):
-        orm_mode = True 
+    # 元数据
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据") 

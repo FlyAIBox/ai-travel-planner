@@ -18,8 +18,8 @@ from pydantic import BaseModel, Field
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
 from .context_engine import get_context_engine
+from .websocket_manager import get_websocket_manager, WebSocketManager
 from .conversation_manager import get_conversation_manager, MessageType, ConversationStatus
-from .websocket_manager import get_websocket_manager
 from .mcp_server import get_mcp_server
 from .mcp_tools import create_mcp_tools
 
@@ -135,31 +135,45 @@ app.add_middleware(
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str, conversation_id: Optional[str] = None):
     """WebSocket连接端点"""
-    websocket_manager = app.state.websocket_manager
+    connection_id = None
     
     try:
         # 建立连接
-        connection_id = await websocket_manager.connect(websocket, user_id, conversation_id)
-        logger.info(f"WebSocket连接建立: {connection_id}, 用户: {user_id}")
+        connection_id = await websocket_manager.connect(
+            websocket=websocket,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            metadata={"user_agent": websocket.headers.get("user-agent", "")}
+        )
         
-        # 处理消息
+        logger.info(f"WebSocket连接建立: {connection_id}")
+        
+        # 监听消息
         while True:
             try:
-                data = await websocket.receive_text()
-                await websocket_manager.handle_message(connection_id, data)
+                # 接收消息
+                raw_message = await websocket.receive_text()
+                
+                # 处理消息
+                await websocket_manager.handle_message(connection_id, raw_message)
+                
             except WebSocketDisconnect:
+                logger.info(f"WebSocket客户端断开连接: {connection_id}")
                 break
             except Exception as e:
                 logger.error(f"WebSocket消息处理错误: {e}")
-                await websocket_manager.send_error(connection_id, str(e))
-    
+                await websocket_manager.send_to_connection(connection_id, {
+                    "type": "error",
+                    "content": {"error": f"消息处理错误: {str(e)}"}
+                })
+                
     except Exception as e:
         logger.error(f"WebSocket连接错误: {e}")
-    
+        if connection_id:
+            await websocket_manager.disconnect(connection_id, f"connection_error: {str(e)}")
     finally:
-        # 断开连接
-        await websocket_manager.disconnect(connection_id)
-        logger.info(f"WebSocket连接断开: {connection_id}")
+        if connection_id:
+            await websocket_manager.disconnect(connection_id, "connection_closed")
 
 
 # REST API端点

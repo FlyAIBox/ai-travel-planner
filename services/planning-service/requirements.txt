@@ -1,0 +1,21 @@
+# 基础Web框架
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+
+# 数学和优化
+numpy==1.24.3
+ortools==9.7.2996
+
+# 数据库和缓存
+redis==5.0.1
+aioredis==2.0.1
+
+# HTTP客户端
+httpx==0.25.2
+
+# 配置和环境
+python-dotenv==1.0.0
+
+# 日志和监控
+structlog==23.2.0 

@@ -290,3 +290,4 @@ Thumbs.db
 /data/
 /logs/
 /.kiro/
+.augment/

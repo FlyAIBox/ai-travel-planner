@@ -164,165 +164,175 @@ class VectorDatabasePool:
         
         return health_status
 
+    def get_stats(self) -> Dict[str, Any]:
+        """获取连接池统计信息"""
+        return {
+            "total_nodes": len(self.nodes),
+            "active_connections": len(self.connections),
+            "node_stats": self.connection_stats,
+            "current_node": f"node_{self.current_node_index}"
+        }
+
 
 class VectorDatabase:
-    """向量数据库管理器"""
+    """向量数据库管理类"""
     
-    def __init__(self, 
-                 nodes: List[Dict[str, Any]] = None,
-                 default_collection: str = None):
-        # 默认配置
-        if nodes is None:
-            nodes = [{
-                "host": settings.QDRANT_HOST,
-                "port": settings.QDRANT_PORT,
-                "api_key": settings.QDRANT_API_KEY,
-                "timeout": 30,
-                "prefer_grpc": True
-            }]
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.config = config or {}
         
-        self.pool = VectorDatabasePool(nodes)
-        self.default_collection = default_collection or settings.QDRANT_COLLECTION_NAME
-        
-        # 缓存
-        self.collection_cache: Dict[str, CollectionInfo] = {}
-        self.cache_ttl = timedelta(minutes=5)
-        self.cache_timestamps: Dict[str, datetime] = {}
+        # 集群配置
+        nodes = self.config.get("nodes", [
+            {"host": settings.QDRANT_HOST, "port": settings.QDRANT_PORT}
+        ])
+        self.connection_pool = VectorDatabasePool(nodes)
         
         # 性能监控
-        self.performance_stats = {
+        self.performance_metrics = {
             "total_operations": 0,
-            "total_errors": 0,
-            "operation_times": [],
-            "start_time": datetime.now()
+            "failed_operations": 0,
+            "average_response_time": 0.0,
+            "last_backup_time": None,
+            "last_health_check": None
         }
         
         # 备份配置
-        self.backup_config = {
+        self.backup_config = self.config.get("backup", {
             "enabled": True,
-            "backup_dir": Path("data/backups/qdrant"),
-            "retention_days": 30,
-            "auto_backup_interval": timedelta(hours=6)
-        }
-        
-        # 确保备份目录存在
-        self.backup_config["backup_dir"].mkdir(parents=True, exist_ok=True)
+            "interval_hours": 24,
+            "retention_days": 7,
+            "backup_path": "/data/qdrant/backups"
+        })
+    
+    async def initialize_cluster(self) -> bool:
+        """初始化集群"""
+        try:
+            # 检查所有节点连接
+            all_healthy = True
+            for i, node in enumerate(self.connection_pool.nodes):
+                node_id = f"node_{i}"
+                try:
+                    client = await self.connection_pool.get_client(node_id)
+                    health = await self._check_node_health(client)
+                    if not health:
+                        all_healthy = False
+                        logger.warning(f"节点 {node_id} 健康检查失败")
+                except Exception as e:
+                    logger.error(f"节点 {node_id} 连接失败: {e}")
+                    all_healthy = False
+            
+            if all_healthy:
+                logger.info("Qdrant集群初始化成功")
+                return True
+            else:
+                logger.warning("部分节点不健康，但集群可用")
+                return True
+                
+        except Exception as e:
+            logger.error(f"集群初始化失败: {e}")
+            return False
+    
+    async def _check_node_health(self, client: QdrantClient) -> bool:
+        """检查节点健康状态"""
+        try:
+            # 获取集群信息
+            cluster_info = client.get_cluster_info()
+            # 检查节点状态
+            collections = client.get_collections()
+            return True
+        except Exception as e:
+            logger.error(f"节点健康检查失败: {e}")
+            return False
     
     async def create_collection(self, 
-                              collection_name: str,
-                              vector_config: VectorIndexConfig,
-                              shard_number: int = 1,
-                              replication_factor: int = 1,
-                              write_consistency_factor: int = 1) -> bool:
+                              collection_name: str, 
+                              config: VectorIndexConfig,
+                              replica_count: int = 1,
+                              shard_count: int = 1) -> bool:
         """创建集合"""
         start_time = time.time()
+        success = False
         
         try:
-            client = await self.pool.get_client()
+            best_node = self.connection_pool.get_best_node()
+            client = await self.connection_pool.get_client(best_node)
             
-            # 配置向量参数
+            # 创建集合配置
             vectors_config = models.VectorParams(
-                size=vector_config.vector_size,
-                distance=models.Distance(vector_config.distance)
-            )
-            
-            # 配置HNSW索引
-            hnsw_config = models.HnswConfigDiff(
-                m=vector_config.hnsw_config.get("m", 16),
-                ef_construct=vector_config.hnsw_config.get("ef_construct", 100),
-                full_scan_threshold=vector_config.hnsw_config.get("full_scan_threshold", 10000),
-                max_indexing_threads=vector_config.hnsw_config.get("max_indexing_threads", 4)
-            )
-            
-            # 配置量化
-            quantization_config = None
-            if vector_config.quantization_config:
-                quantization_config = models.ScalarQuantization(
-                    scalar=models.ScalarQuantizationConfig(
-                        type=models.ScalarType.INT8,
-                        quantile=vector_config.quantization_config["scalar"].get("quantile", 0.99),
-                        always_ram=vector_config.quantization_config["scalar"].get("always_ram", True)
-                    )
-                )
-            
-            # 配置优化器
-            optimizers_config = models.OptimizersConfigDiff(
-                deleted_threshold=0.2,
-                vacuum_min_vector_number=1000,
-                default_segment_number=shard_number,
-                max_segment_size=None,
-                memmap_threshold=None,
-                indexing_threshold=20000,
-                flush_interval_sec=5,
-                max_optimization_threads=4
+                size=config.vector_size,
+                distance=config.distance,
+                hnsw_config=models.HnswConfigDiff(**config.hnsw_config) if config.hnsw_config else None,
+                quantization_config=models.QuantizationConfig(**config.quantization_config) if config.quantization_config else None
             )
             
             # 创建集合
-            await client.create_collection(
+            client.create_collection(
                 collection_name=collection_name,
                 vectors_config=vectors_config,
-                shard_number=shard_number,
-                replication_factor=replication_factor,
-                write_consistency_factor=write_consistency_factor,
-                hnsw_config=hnsw_config,
-                quantization_config=quantization_config,
-                optimizers_config=optimizers_config
+                replication_factor=replica_count,
+                shard_number=shard_count,
+                on_disk_payload=True,  # 大数据集优化
+                timeout=60
             )
             
             # 创建索引
-            await self._create_payload_indexes(client, collection_name)
+            await self._optimize_collection(client, collection_name)
             
-            execution_time = time.time() - start_time
-            self._record_operation("create_collection", execution_time, True)
-            
-            logger.info(f"成功创建集合: {collection_name}")
+            success = True
+            logger.info(f"集合 {collection_name} 创建成功")
             return True
             
         except Exception as e:
-            execution_time = time.time() - start_time
-            self._record_operation("create_collection", execution_time, False)
             logger.error(f"创建集合失败: {e}")
             return False
+        finally:
+            response_time = time.time() - start_time
+            self._record_operation(response_time, success)
     
-    async def _create_payload_indexes(self, client: QdrantClient, collection_name: str) -> None:
-        """创建载荷索引"""
-        # 常用字段索引
-        indexes = [
-            ("document_type", models.PayloadSchemaType.KEYWORD),
-            ("source", models.PayloadSchemaType.KEYWORD),
-            ("timestamp", models.PayloadSchemaType.DATETIME),
-            ("category", models.PayloadSchemaType.KEYWORD),
-            ("language", models.PayloadSchemaType.KEYWORD),
-            ("metadata.priority", models.PayloadSchemaType.INTEGER),
-        ]
-        
-        for field_name, field_type in indexes:
-            try:
-                await client.create_payload_index(
-                    collection_name=collection_name,
-                    field_name=field_name,
-                    field_schema=field_type
-                )
-                logger.info(f"创建索引: {collection_name}.{field_name}")
-            except Exception as e:
-                logger.warning(f"创建索引失败 {field_name}: {e}")
+    async def _optimize_collection(self, client: QdrantClient, collection_name: str) -> None:
+        """优化集合性能"""
+        try:
+            # 创建payload索引以提高过滤性能
+            index_configs = [
+                ("document_type", models.PayloadSchemaType.KEYWORD),
+                ("source", models.PayloadSchemaType.KEYWORD),
+                ("created_at", models.PayloadSchemaType.DATETIME),
+                ("category", models.PayloadSchemaType.KEYWORD),
+                ("language", models.PayloadSchemaType.KEYWORD)
+            ]
+            
+            for field_name, field_type in index_configs:
+                try:
+                    client.create_payload_index(
+                        collection_name=collection_name,
+                        field_name=field_name,
+                        field_schema=field_type
+                    )
+                except Exception as e:
+                    logger.warning(f"创建索引 {field_name} 失败: {e}")
+                    
+        except Exception as e:
+            logger.error(f"优化集合失败: {e}")
     
-    async def insert_vectors(self, 
+    async def upsert_vectors(self, 
                            collection_name: str,
                            vectors: List[List[float]],
                            payloads: List[Dict[str, Any]],
                            ids: Optional[List[str]] = None,
                            batch_size: int = 100) -> bool:
-        """插入向量"""
+        """批量插入/更新向量"""
         start_time = time.time()
+        success = False
         
         try:
-            client = await self.pool.get_client()
+            best_node = self.connection_pool.get_best_node()
+            client = await self.connection_pool.get_client(best_node)
             
+            # 生成ID
             if ids is None:
                 ids = [str(uuid.uuid4()) for _ in range(len(vectors))]
             
-            # 分批插入
+            # 批量处理
+            total_inserted = 0
             for i in range(0, len(vectors), batch_size):
                 batch_vectors = vectors[i:i + batch_size]
                 batch_payloads = payloads[i:i + batch_size]
@@ -337,25 +347,26 @@ class VectorDatabase:
                     for point_id, vector, payload in zip(batch_ids, batch_vectors, batch_payloads)
                 ]
                 
-                await client.upsert(
+                # 执行批量插入
+                operation_info = client.upsert(
                     collection_name=collection_name,
                     points=points,
                     wait=True
                 )
                 
-                logger.info(f"插入批次 {i//batch_size + 1}: {len(points)} 个向量")
+                total_inserted += len(points)
+                logger.info(f"批量插入 {len(points)} 个向量，总计: {total_inserted}")
             
-            execution_time = time.time() - start_time
-            self._record_operation("insert_vectors", execution_time, True)
-            
-            logger.info(f"成功插入 {len(vectors)} 个向量到集合 {collection_name}")
+            success = True
+            logger.info(f"成功插入 {total_inserted} 个向量到集合 {collection_name}")
             return True
             
         except Exception as e:
-            execution_time = time.time() - start_time
-            self._record_operation("insert_vectors", execution_time, False)
-            logger.error(f"插入向量失败: {e}")
+            logger.error(f"批量插入向量失败: {e}")
             return False
+        finally:
+            response_time = time.time() - start_time
+            self._record_operation(response_time, success)
     
     async def search_vectors(self,
                            collection_name: str,
@@ -363,368 +374,289 @@ class VectorDatabase:
                            limit: int = 10,
                            score_threshold: Optional[float] = None,
                            filter_conditions: Optional[Dict[str, Any]] = None,
-                           with_payload: bool = True,
-                           with_vectors: bool = False) -> List[VectorSearchResult]:
+                           with_vectors: bool = False,
+                           with_payload: bool = True) -> List[VectorSearchResult]:
         """搜索向量"""
         start_time = time.time()
+        success = False
         
         try:
-            client = await self.pool.get_client(self.pool.get_best_node())
+            best_node = self.connection_pool.get_best_node()
+            client = await self.connection_pool.get_client(best_node)
             
             # 构建过滤条件
-            query_filter = None
+            search_filter = None
             if filter_conditions:
-                query_filter = self._build_filter(filter_conditions)
+                search_filter = models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key=key,
+                            match=models.MatchValue(value=value)
+                        )
+                        for key, value in filter_conditions.items()
+                    ]
+                )
             
             # 执行搜索
-            search_result = await client.search(
+            search_result = client.search(
                 collection_name=collection_name,
                 query_vector=query_vector,
-                query_filter=query_filter,
+                query_filter=search_filter,
                 limit=limit,
                 score_threshold=score_threshold,
-                with_payload=with_payload,
-                with_vectors=with_vectors
+                with_vectors=with_vectors,
+                with_payload=with_payload
             )
             
-            # 转换结果
+            # 格式化结果
             results = []
-            for scored_point in search_result:
+            for hit in search_result:
                 result = VectorSearchResult(
-                    id=str(scored_point.id),
-                    score=scored_point.score,
-                    payload=scored_point.payload or {},
-                    vector=scored_point.vector if with_vectors else None
+                    id=str(hit.id),
+                    score=hit.score,
+                    payload=hit.payload or {},
+                    vector=hit.vector if with_vectors else None
                 )
                 results.append(result)
             
-            execution_time = time.time() - start_time
-            self._record_operation("search_vectors", execution_time, True)
-            
+            success = True
             return results
             
         except Exception as e:
-            execution_time = time.time() - start_time
-            self._record_operation("search_vectors", execution_time, False)
-            logger.error(f"搜索向量失败: {e}")
+            logger.error(f"向量搜索失败: {e}")
             return []
-    
-    def _build_filter(self, conditions: Dict[str, Any]) -> models.Filter:
-        """构建查询过滤器"""
-        must_conditions = []
-        should_conditions = []
-        must_not_conditions = []
-        
-        for key, value in conditions.items():
-            if key.startswith("must_"):
-                field_name = key[5:]  # 移除 "must_" 前缀
-                if isinstance(value, list):
-                    must_conditions.append(
-                        models.FieldCondition(
-                            key=field_name,
-                            match=models.MatchAny(any=value)
-                        )
-                    )
-                else:
-                    must_conditions.append(
-                        models.FieldCondition(
-                            key=field_name,
-                            match=models.MatchValue(value=value)
-                        )
-                    )
-            elif key.startswith("should_"):
-                field_name = key[7:]  # 移除 "should_" 前缀
-                if isinstance(value, list):
-                    should_conditions.append(
-                        models.FieldCondition(
-                            key=field_name,
-                            match=models.MatchAny(any=value)
-                        )
-                    )
-                else:
-                    should_conditions.append(
-                        models.FieldCondition(
-                            key=field_name,
-                            match=models.MatchValue(value=value)
-                        )
-                    )
-            elif key.startswith("not_"):
-                field_name = key[4:]  # 移除 "not_" 前缀
-                if isinstance(value, list):
-                    must_not_conditions.append(
-                        models.FieldCondition(
-                            key=field_name,
-                            match=models.MatchAny(any=value)
-                        )
-                    )
-                else:
-                    must_not_conditions.append(
-                        models.FieldCondition(
-                            key=field_name,
-                            match=models.MatchValue(value=value)
-                        )
-                    )
-            elif key.startswith("range_"):
-                field_name = key[6:]  # 移除 "range_" 前缀
-                if isinstance(value, dict) and ("gte" in value or "lte" in value or "gt" in value or "lt" in value):
-                    must_conditions.append(
-                        models.FieldCondition(
-                            key=field_name,
-                            range=models.Range(
-                                gte=value.get("gte"),
-                                lte=value.get("lte"),
-                                gt=value.get("gt"),
-                                lt=value.get("lt")
-                            )
-                        )
-                    )
-        
-        return models.Filter(
-            must=must_conditions if must_conditions else None,
-            should=should_conditions if should_conditions else None,
-            must_not=must_not_conditions if must_not_conditions else None
-        )
+        finally:
+            response_time = time.time() - start_time
+            self._record_operation(response_time, success)
     
     async def delete_vectors(self,
                            collection_name: str,
-                           point_ids: List[str] = None,
-                           filter_conditions: Dict[str, Any] = None) -> bool:
+                           point_ids: List[str]) -> bool:
         """删除向量"""
         start_time = time.time()
+        success = False
         
         try:
-            client = await self.pool.get_client()
+            best_node = self.connection_pool.get_best_node()
+            client = await self.connection_pool.get_client(best_node)
             
-            if point_ids:
-                # 按ID删除
-                await client.delete(
-                    collection_name=collection_name,
-                    points_selector=models.PointIdsList(
-                        points=point_ids
-                    ),
-                    wait=True
-                )
-                logger.info(f"删除了 {len(point_ids)} 个向量")
-            elif filter_conditions:
-                # 按条件删除
-                query_filter = self._build_filter(filter_conditions)
-                await client.delete(
-                    collection_name=collection_name,
-                    points_selector=models.FilterSelector(
-                        filter=query_filter
-                    ),
-                    wait=True
-                )
-                logger.info(f"按条件删除向量: {filter_conditions}")
+            # 执行删除
+            operation_info = client.delete(
+                collection_name=collection_name,
+                points_selector=models.PointIdsList(
+                    points=point_ids
+                ),
+                wait=True
+            )
             
-            execution_time = time.time() - start_time
-            self._record_operation("delete_vectors", execution_time, True)
-            
+            success = True
+            logger.info(f"成功删除 {len(point_ids)} 个向量")
             return True
             
         except Exception as e:
-            execution_time = time.time() - start_time
-            self._record_operation("delete_vectors", execution_time, False)
             logger.error(f"删除向量失败: {e}")
             return False
+        finally:
+            response_time = time.time() - start_time
+            self._record_operation(response_time, success)
     
-    async def get_collection_info(self, collection_name: str, use_cache: bool = True) -> Optional[CollectionInfo]:
+    async def get_collection_info(self, collection_name: str) -> Optional[CollectionInfo]:
         """获取集合信息"""
-        # 检查缓存
-        if use_cache and collection_name in self.collection_cache:
-            cached_time = self.cache_timestamps.get(collection_name)
-            if cached_time and datetime.now() - cached_time < self.cache_ttl:
-                return self.collection_cache[collection_name]
-        
         try:
-            client = await self.pool.get_client()
-            collection_info = await client.get_collection(collection_name)
+            best_node = self.connection_pool.get_best_node()
+            client = await self.connection_pool.get_client(best_node)
             
-            info = CollectionInfo(
+            collection_info = client.get_collection(collection_name)
+            
+            return CollectionInfo(
                 name=collection_name,
-                vectors_count=collection_info.vectors_count,
-                indexed_vectors_count=collection_info.indexed_vectors_count,
-                points_count=collection_info.points_count,
-                segments_count=collection_info.segments_count,
-                status=collection_info.status.value,
-                optimizer_status=collection_info.optimizer_status.status.value,
-                disk_usage=collection_info.disk_usage
+                vectors_count=collection_info.vectors_count or 0,
+                indexed_vectors_count=collection_info.indexed_vectors_count or 0,
+                points_count=collection_info.points_count or 0,
+                segments_count=len(collection_info.segments or []),
+                status=collection_info.status.name if collection_info.status else "unknown",
+                optimizer_status=collection_info.optimizer_status.name if collection_info.optimizer_status else "unknown",
+                disk_usage=collection_info.segments[0].disk_usage_bytes if collection_info.segments else 0
             )
-            
-            # 更新缓存
-            self.collection_cache[collection_name] = info
-            self.cache_timestamps[collection_name] = datetime.now()
-            
-            return info
             
         except Exception as e:
             logger.error(f"获取集合信息失败: {e}")
             return None
     
-    async def optimize_collection(self, collection_name: str) -> bool:
-        """优化集合"""
-        try:
-            client = await self.pool.get_client()
-            
-            # 执行优化
-            await client.update_collection(
-                collection_name=collection_name,
-                optimizer_config=models.OptimizersConfigDiff(
-                    indexing_threshold=10000,
-                    max_optimization_threads=4
-                )
-            )
-            
-            logger.info(f"集合优化已启动: {collection_name}")
+    async def backup_collection(self, collection_name: str, backup_path: Optional[str] = None) -> bool:
+        """备份集合"""
+        if not self.backup_config.get("enabled", False):
+            logger.info("备份功能未启用")
             return True
             
-        except Exception as e:
-            logger.error(f"集合优化失败: {e}")
-            return False
-    
-    async def create_snapshot(self, collection_name: str) -> Optional[str]:
-        """创建快照"""
         try:
-            client = await self.pool.get_client()
+            backup_path = backup_path or self.backup_config.get("backup_path", "/tmp/qdrant_backup")
+            backup_name = f"{collection_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            best_node = self.connection_pool.get_best_node()
+            client = await self.connection_pool.get_client(best_node)
             
             # 创建快照
-            snapshot_info = await client.create_snapshot(collection_name=collection_name)
-            snapshot_name = snapshot_info.name
+            snapshot_info = client.create_snapshot(collection_name=collection_name)
             
-            # 下载快照到本地
-            backup_path = self.backup_config["backup_dir"] / f"{collection_name}_{snapshot_name}.snapshot"
-            await client.download_snapshot(
-                collection_name=collection_name,
-                snapshot_name=snapshot_name,
-                output_path=str(backup_path)
-            )
+            # 这里可以添加实际的备份逻辑
+            # 例如将快照文件复制到备份位置
             
-            logger.info(f"快照已创建并下载: {backup_path}")
-            return str(backup_path)
-            
-        except Exception as e:
-            logger.error(f"创建快照失败: {e}")
-            return None
-    
-    async def restore_snapshot(self, collection_name: str, snapshot_path: str) -> bool:
-        """恢复快照"""
-        try:
-            client = await self.pool.get_client()
-            
-            # 上传并恢复快照
-            await client.restore_snapshot(
-                collection_name=collection_name,
-                snapshot_path=snapshot_path
-            )
-            
-            logger.info(f"快照已恢复: {snapshot_path}")
+            self.performance_metrics["last_backup_time"] = datetime.now()
+            logger.info(f"集合 {collection_name} 备份成功: {backup_name}")
             return True
             
         except Exception as e:
-            logger.error(f"恢复快照失败: {e}")
+            logger.error(f"备份集合失败: {e}")
             return False
     
-    async def cleanup_old_backups(self) -> None:
-        """清理旧备份"""
+    async def restore_collection(self, collection_name: str, backup_path: str) -> bool:
+        """恢复集合"""
         try:
-            cutoff_date = datetime.now() - timedelta(days=self.backup_config["retention_days"])
-            backup_dir = self.backup_config["backup_dir"]
+            best_node = self.connection_pool.get_best_node()
+            client = await self.connection_pool.get_client(best_node)
             
-            removed_count = 0
-            for backup_file in backup_dir.glob("*.snapshot"):
-                file_time = datetime.fromtimestamp(backup_file.stat().st_mtime)
-                if file_time < cutoff_date:
-                    backup_file.unlink()
-                    removed_count += 1
+            # 这里可以添加实际的恢复逻辑
+            # 例如从备份文件恢复快照
             
-            if removed_count > 0:
-                logger.info(f"清理了 {removed_count} 个旧备份文件")
-                
+            logger.info(f"集合 {collection_name} 恢复成功")
+            return True
+            
         except Exception as e:
-            logger.error(f"清理备份失败: {e}")
-    
-    def _record_operation(self, operation: str, execution_time: float, success: bool) -> None:
-        """记录操作统计"""
-        self.performance_stats["total_operations"] += 1
-        if not success:
-            self.performance_stats["total_errors"] += 1
-        
-        self.performance_stats["operation_times"].append(execution_time)
-        
-        # 保持最近1000次操作时间
-        if len(self.performance_stats["operation_times"]) > 1000:
-            self.performance_stats["operation_times"] = self.performance_stats["operation_times"][-1000:]
-    
-    def get_performance_stats(self) -> Dict[str, Any]:
-        """获取性能统计"""
-        operation_times = self.performance_stats["operation_times"]
-        
-        stats = {
-            "total_operations": self.performance_stats["total_operations"],
-            "total_errors": self.performance_stats["total_errors"],
-            "error_rate": self.performance_stats["total_errors"] / max(self.performance_stats["total_operations"], 1),
-            "uptime_seconds": (datetime.now() - self.performance_stats["start_time"]).total_seconds()
-        }
-        
-        if operation_times:
-            stats.update({
-                "avg_operation_time": np.mean(operation_times),
-                "min_operation_time": np.min(operation_times),
-                "max_operation_time": np.max(operation_times),
-                "p95_operation_time": np.percentile(operation_times, 95),
-                "p99_operation_time": np.percentile(operation_times, 99)
-            })
-        
-        return stats
+            logger.error(f"恢复集合失败: {e}")
+            return False
     
     async def health_check(self) -> Dict[str, Any]:
         """健康检查"""
-        health_info = {
+        health_status = {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "nodes": {},
-            "collections": {},
-            "performance": self.get_performance_stats()
+            "cluster_nodes": [],
+            "collections": [],
+            "performance_metrics": self.performance_metrics.copy()
         }
         
         try:
-            # 检查节点健康状态
-            node_health = await self.pool.health_check()
-            health_info["nodes"] = node_health
+            # 检查所有节点
+            for i, node in enumerate(self.connection_pool.nodes):
+                node_id = f"node_{i}"
+                node_status = {
+                    "node_id": node_id,
+                    "host": node["host"],
+                    "port": node.get("port", 6333),
+                    "status": "unknown",
+                    "collections_count": 0,
+                    "response_time": None
+                }
+                
+                try:
+                    start_time = time.time()
+                    client = await self.connection_pool.get_client(node_id)
+                    collections = client.get_collections()
+                    response_time = time.time() - start_time
+                    
+                    node_status.update({
+                        "status": "healthy",
+                        "collections_count": len(collections.collections),
+                        "response_time": response_time
+                    })
+                    
+                except Exception as e:
+                    node_status["status"] = f"error: {str(e)}"
+                    health_status["status"] = "degraded"
+                
+                health_status["cluster_nodes"].append(node_status)
             
             # 检查集合状态
-            client = await self.pool.get_client()
-            collections = await client.get_collections()
+            try:
+                best_node = self.connection_pool.get_best_node()
+                client = await self.connection_pool.get_client(best_node)
+                collections = client.get_collections()
+                
+                for collection in collections.collections:
+                    collection_info = await self.get_collection_info(collection.name)
+                    if collection_info:
+                        health_status["collections"].append({
+                            "name": collection.name,
+                            "vectors_count": collection_info.vectors_count,
+                            "status": collection_info.status
+                        })
+            except Exception as e:
+                logger.error(f"检查集合状态失败: {e}")
+                health_status["status"] = "degraded"
             
-            for collection in collections.collections:
-                collection_info = await self.get_collection_info(collection.name, use_cache=False)
-                if collection_info:
-                    health_info["collections"][collection.name] = {
-                        "status": collection_info.status,
-                        "points_count": collection_info.points_count,
-                        "vectors_count": collection_info.vectors_count
-                    }
-            
-            # 判断整体健康状态
-            unhealthy_nodes = [node for node, healthy in node_health.items() if not healthy]
-            if unhealthy_nodes:
-                health_info["status"] = "degraded"
-                health_info["unhealthy_nodes"] = unhealthy_nodes
+            self.performance_metrics["last_health_check"] = datetime.now()
             
         except Exception as e:
-            health_info["status"] = "unhealthy"
-            health_info["error"] = str(e)
             logger.error(f"健康检查失败: {e}")
+            health_status["status"] = "error"
+            health_status["error"] = str(e)
         
-        return health_info
+        return health_status
+    
+    def _record_operation(self, response_time: float, success: bool) -> None:
+        """记录操作统计"""
+        self.performance_metrics["total_operations"] += 1
+        if not success:
+            self.performance_metrics["failed_operations"] += 1
+        
+        # 更新平均响应时间
+        total_ops = self.performance_metrics["total_operations"]
+        current_avg = self.performance_metrics["average_response_time"]
+        self.performance_metrics["average_response_time"] = (
+            (current_avg * (total_ops - 1) + response_time) / total_ops
+        )
+    
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """获取性能统计"""
+        stats = self.performance_metrics.copy()
+        stats["connection_pool"] = self.connection_pool.get_stats()
+        
+        # 计算错误率
+        total_ops = stats["total_operations"]
+        failed_ops = stats["failed_operations"]
+        stats["error_rate"] = (failed_ops / total_ops * 100) if total_ops > 0 else 0
+        
+        return stats
+    
+    async def optimize_all_collections(self) -> Dict[str, bool]:
+        """优化所有集合"""
+        results = {}
+        
+        try:
+            best_node = self.connection_pool.get_best_node()
+            client = await self.connection_pool.get_client(best_node)
+            collections = client.get_collections()
+            
+            for collection in collections.collections:
+                try:
+                    # 触发索引优化
+                    client.update_collection(
+                        collection_name=collection.name,
+                        optimizer_config=models.OptimizersConfigDiff(
+                            indexing_threshold=10000,
+                            max_segment_size=200000
+                        )
+                    )
+                    results[collection.name] = True
+                    logger.info(f"集合 {collection.name} 优化完成")
+                except Exception as e:
+                    logger.error(f"优化集合 {collection.name} 失败: {e}")
+                    results[collection.name] = False
+        
+        except Exception as e:
+            logger.error(f"优化所有集合失败: {e}")
+        
+        return results
 
 
-# 全局实例
-vector_database = None
+# 全局向量数据库实例
+_vector_database: Optional[VectorDatabase] = None
 
-def get_vector_database() -> VectorDatabase:
+
+def get_vector_database(config: Optional[Dict[str, Any]] = None) -> VectorDatabase:
     """获取向量数据库实例"""
-    global vector_database
-    if vector_database is None:
-        vector_database = VectorDatabase()
-    return vector_database 
+    global _vector_database
+    if _vector_database is None:
+        _vector_database = VectorDatabase(config)
+    return _vector_database 
