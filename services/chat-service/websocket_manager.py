@@ -95,7 +95,7 @@ class WebSocketManager:
         # 心跳和清理任务
         self._heartbeat_task = None
         self._cleanup_task = None
-        
+    
     def _create_redis_client(self) -> redis.Redis:
         """创建Redis客户端"""
         try:
@@ -131,15 +131,15 @@ class WebSocketManager:
         
         connection_id = str(uuid.uuid4())
         now = datetime.now()
-        
-        connection = WebSocketConnection(
-            connection_id=connection_id,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            websocket=websocket,
+            
+            connection = WebSocketConnection(
+                connection_id=connection_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                websocket=websocket,
             connected_at=now,
             last_activity=now,
-            status=ConnectionStatus.CONNECTED,
+                status=ConnectionStatus.CONNECTED,
             metadata=metadata or {}
         )
         
@@ -159,8 +159,8 @@ class WebSocketManager:
         
         # 记录连接信息到Redis
         await self._save_connection_to_redis(connection)
-        
-        # 发送连接成功消息
+            
+            # 发送连接成功消息
         await self.send_to_connection(connection_id, {
             "type": MessageTypeWS.NOTIFICATION.value,
             "content": {
@@ -169,11 +169,11 @@ class WebSocketManager:
                 "user_id": user_id,
                 "conversation_id": conversation_id
             }
-        })
-        
-        logger.info(f"WebSocket连接建立: {connection_id}, 用户: {user_id}")
-        return connection_id
-    
+            })
+            
+            logger.info(f"WebSocket连接建立: {connection_id}, 用户: {user_id}")
+            return connection_id
+            
     async def disconnect(self, connection_id: str, reason: str = "unknown"):
         """断开WebSocket连接"""
         
@@ -295,7 +295,7 @@ class WebSocketManager:
             message = {
                 "type": MessageTypeWS.STREAM_CHUNK.value,
                 "content": {
-                    "stream_id": stream_id,
+            "stream_id": stream_id,
                     "chunk": chunk
                 }
             }
@@ -359,8 +359,8 @@ class WebSocketManager:
         if not self.conversation_manager:
             logger.error("ConversationManager未初始化")
             return
-        
-        # 添加消息到对话管理器
+            
+            # 添加消息到对话管理器
         if message.conversation_id:
             try:
                 saved_message = await self.conversation_manager.add_message(

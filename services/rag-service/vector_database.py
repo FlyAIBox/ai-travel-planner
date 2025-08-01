@@ -244,7 +244,7 @@ class VectorDatabase:
             return False
     
     async def create_collection(self, 
-                              collection_name: str, 
+                              collection_name: str,
                               config: VectorIndexConfig,
                               replica_count: int = 1,
                               shard_count: int = 1) -> bool:
@@ -293,24 +293,24 @@ class VectorDatabase:
         try:
             # 创建payload索引以提高过滤性能
             index_configs = [
-                ("document_type", models.PayloadSchemaType.KEYWORD),
-                ("source", models.PayloadSchemaType.KEYWORD),
+            ("document_type", models.PayloadSchemaType.KEYWORD),
+            ("source", models.PayloadSchemaType.KEYWORD),
                 ("created_at", models.PayloadSchemaType.DATETIME),
-                ("category", models.PayloadSchemaType.KEYWORD),
+            ("category", models.PayloadSchemaType.KEYWORD),
                 ("language", models.PayloadSchemaType.KEYWORD)
-            ]
-            
+        ]
+        
             for field_name, field_type in index_configs:
-                try:
+            try:
                     client.create_payload_index(
-                        collection_name=collection_name,
-                        field_name=field_name,
-                        field_schema=field_type
-                    )
+                    collection_name=collection_name,
+                    field_name=field_name,
+                    field_schema=field_type
+                )
                 except Exception as e:
                     logger.warning(f"创建索引 {field_name} 失败: {e}")
                     
-        except Exception as e:
+            except Exception as e:
             logger.error(f"优化集合失败: {e}")
     
     async def upsert_vectors(self, 
@@ -442,12 +442,12 @@ class VectorDatabase:
             
             # 执行删除
             operation_info = client.delete(
-                collection_name=collection_name,
-                points_selector=models.PointIdsList(
-                    points=point_ids
-                ),
-                wait=True
-            )
+                    collection_name=collection_name,
+                    points_selector=models.PointIdsList(
+                        points=point_ids
+                    ),
+                    wait=True
+                )
             
             success = True
             logger.info(f"成功删除 {len(point_ids)} 个向量")
@@ -586,7 +586,7 @@ class VectorDatabase:
                 health_status["status"] = "degraded"
             
             self.performance_metrics["last_health_check"] = datetime.now()
-            
+                
         except Exception as e:
             logger.error(f"健康检查失败: {e}")
             health_status["status"] = "error"
@@ -643,7 +643,7 @@ class VectorDatabase:
                 except Exception as e:
                     logger.error(f"优化集合 {collection.name} 失败: {e}")
                     results[collection.name] = False
-        
+            
         except Exception as e:
             logger.error(f"优化所有集合失败: {e}")
         

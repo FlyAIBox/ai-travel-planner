@@ -166,7 +166,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, conversation_id
                     "type": "error",
                     "content": {"error": f"消息处理错误: {str(e)}"}
                 })
-                
+    
     except Exception as e:
         logger.error(f"WebSocket连接错误: {e}")
         if connection_id:

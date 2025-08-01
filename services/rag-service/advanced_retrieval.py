@@ -135,7 +135,7 @@ class QueryProcessor:
                 r'recommend|suggestion|best|top|suggest'
             ]
         }
-    
+        
     def detect_language(self, text: str) -> str:
         """检测查询语言"""
         chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
@@ -179,13 +179,13 @@ class QueryProcessor:
                     })
             elif language == "en" and self.nlp_en:
                 doc = self.nlp_en(text)
-                for ent in doc.ents:
-                    entities.append({
-                        "text": ent.text,
-                        "label": ent.label_,
-                        "start": ent.start_char,
-                        "end": ent.end_char
-                    })
+        for ent in doc.ents:
+            entities.append({
+                "text": ent.text,
+                "label": ent.label_,
+                "start": ent.start_char,
+                "end": ent.end_char
+            })
         except Exception as e:
             logger.warning(f"实体提取失败: {e}")
         
@@ -320,12 +320,12 @@ class BM25Retriever:
             
             # 预处理文档
             corpus = []
-            for doc in documents:
+        for doc in documents:
                 content = doc.get("content", "")
                 # 简单的中英文分词
                 if any('\u4e00' <= char <= '\u9fff' for char in content):
                     # 中文分词
-                    tokens = list(jieba.cut(content))
+            tokens = list(jieba.cut(content))
                 else:
                     # 英文分词
                     tokens = re.findall(r'\b\w+\b', content.lower())
@@ -350,32 +350,32 @@ class BM25Retriever:
         try:
             # 查询分词
             if any('\u4e00' <= char <= '\u9fff' for char in query):
-                query_tokens = list(jieba.cut(query))
+        query_tokens = list(jieba.cut(query))
             else:
                 query_tokens = re.findall(r'\b\w+\b', query.lower())
-            
+        
             # 计算分数
-            scores = self.bm25.get_scores(query_tokens)
-            
+        scores = self.bm25.get_scores(query_tokens)
+        
             # 获取top-k结果
-            top_indices = np.argsort(scores)[::-1][:limit]
-            
-            results = []
+        top_indices = np.argsort(scores)[::-1][:limit]
+        
+        results = []
             for rank, idx in enumerate(top_indices):
                 if scores[idx] > 0:  # 只返回有分数的结果
                     doc = self.documents[idx]
                     result = RetrievalResult(
                         id=doc["id"],
                         content=doc.get("content", ""),
-                        score=float(scores[idx]),
+                    score=float(scores[idx]),
                         source=doc.get("source", "unknown"),
                         metadata=doc.get("metadata", {}),
                         retrieval_method="bm25",
                         rank=rank
                     )
                     results.append(result)
-            
-            return results
+        
+        return results
             
         except Exception as e:
             logger.error(f"BM25检索失败: {e}")
@@ -400,8 +400,8 @@ class GraphRetriever:
             # 添加节点
             for doc in documents:
                 doc_id = doc["id"]
-                self.graph.add_node(doc_id, **doc)
-            
+            self.graph.add_node(doc_id, **doc)
+        
             # 计算文档相似度并添加边
             from .knowledge_builder import get_knowledge_builder
             knowledge_builder = get_knowledge_builder()
@@ -458,7 +458,7 @@ class GraphRetriever:
             start_nodes = sorted(node_similarities.items(), key=lambda x: x[1], reverse=True)[:3]
             
             # 使用随机游走或广度优先搜索扩展结果
-            expanded_nodes = set()
+        expanded_nodes = set()
             for start_node, start_similarity in start_nodes:
                 # 添加起始节点
                 expanded_nodes.add(start_node)
@@ -479,13 +479,13 @@ class GraphRetriever:
                             visited.add(neighbor)
                             expanded_nodes.add(neighbor)
                             queue.append((neighbor, hop + 1))
-            
-            # 构建结果
+        
+        # 构建结果
             results = []
             for rank, node_id in enumerate(list(expanded_nodes)[:limit]):
                 node_data = self.graph.nodes[node_id]
                 similarity = node_similarities.get(node_id, 0)
-                
+            
                 result = RetrievalResult(
                     id=node_id,
                     content=node_data.get("content", ""),
@@ -538,7 +538,7 @@ class CrossEncoder:
             
             # 计算重排序分数
             rerank_scores = self.model.predict(query_doc_pairs)
-            
+                
             # 更新结果分数并重新排序
             for i, (result, score) in enumerate(zip(results, rerank_scores)):
                 result.score = float(score)
@@ -583,13 +583,13 @@ class HybridRetriever:
         # 缓存
         self.document_cache = {}
         self.last_cache_update = None
-        
+    
     async def initialize(self) -> None:
         """初始化混合检索器"""
         try:
             # 加载文档到缓存
             await self._refresh_document_cache()
-            
+        
             # 训练BM25模型
             if self.document_cache:
                 documents_list = list(self.document_cache.values())
@@ -641,9 +641,9 @@ class HybridRetriever:
             raise
     
     async def search(self, 
-                    query: str,
+        query: str,
                     strategy: RetrievalStrategy = RetrievalStrategy.HYBRID,
-                    limit: int = 10,
+        limit: int = 10,
                     rerank: bool = True) -> HybridSearchResult:
         """执行混合检索"""
         start_time = datetime.now()
@@ -728,12 +728,12 @@ class HybridRetriever:
                     rank=rank
                 )
                 results.append(result)
-            
-            return results
-            
+        
+        return results
+    
         except Exception as e:
             logger.error(f"向量检索失败: {e}")
-            return []
+        return []
     
     def _merge_results(self, 
                       all_results: List[RetrievalResult], 

@@ -248,7 +248,7 @@ class MCPPromptManager:
     def list_prompts(self) -> List[MCPPrompt]:
         """列出所有提示词"""
         return list(self.prompts.values())
-    
+
     async def get_prompt_content(self, name: str, arguments: Dict[str, Any] = None) -> Dict[str, Any]:
         """获取提示词内容"""
         handler = self.prompt_handlers.get(name)
@@ -341,7 +341,7 @@ class MCPServer:
         
         # 注册默认处理器
         self._register_default_handlers()
-    
+        
     def _register_default_handlers(self):
         """注册默认处理器"""
         # 这里可以注册一些默认的处理器
@@ -360,7 +360,7 @@ class MCPServer:
             # 路由消息
             response = await self._route_message(client_id, message)
             
-            if response:
+                        if response:
                 return json.dumps(response.dict(exclude_none=True), ensure_ascii=False)
             
             return None
@@ -409,11 +409,11 @@ class MCPServer:
             return self._create_error_response(message.id, -32603, "Internal error")
     
     async def _handle_initialize(self, client_id: str, message: MCPMessage) -> MCPMessage:
-        """处理初始化请求"""
-        params = message.params or {}
+            """处理初始化请求"""
+            params = message.params or {}
         client_info = params.get("clientInfo", {})
-        
-        # 注册客户端
+            
+            # 注册客户端
         self.clients[client_id] = {
             "client_info": client_info,
             "connected_at": datetime.now(),
@@ -422,48 +422,48 @@ class MCPServer:
         }
         
         self.is_initialized = True
-        
-        return MCPMessage(
-            id=message.id,
-            result={
+            
+            return MCPMessage(
+                id=message.id,
+                result={
                 "protocolVersion": "2024-11-05",
                 "capabilities": {
                     capability.value: {} for capability in MCPCapability
                 },
-                "serverInfo": {
-                    "name": self.server_info.name,
+                    "serverInfo": {
+                        "name": self.server_info.name,
                     "version": self.server_info.version
-                },
+                    },
                 "instructions": self.server_info.instructions
-            }
-        )
-    
+                }
+            )
+        
     async def _handle_ping(self, client_id: str, message: MCPMessage) -> MCPMessage:
-        """处理ping请求"""
-        return MCPMessage(
-            id=message.id,
+            """处理ping请求"""
+            return MCPMessage(
+                id=message.id,
             result={}
-        )
-    
+            )
+        
     async def _handle_tools_list(self, client_id: str, message: MCPMessage) -> MCPMessage:
-        """处理工具列表请求"""
+            """处理工具列表请求"""
         tools = []
         for tool in self.tool_registry.list_tools():
             if self.security_manager.check_tool_permission(tool.name, client_id):
                 tools.append(tool.dict())
         
-        return MCPMessage(
-            id=message.id,
+            return MCPMessage(
+                id=message.id,
             result={"tools": tools}
-        )
-    
-    async def _handle_tools_call(self, client_id: str, message: MCPMessage) -> MCPMessage:
-        """处理工具调用请求"""
-        params = message.params or {}
-        tool_name = params.get("name")
-        arguments = params.get("arguments", {})
+            )
         
-        if not tool_name:
+    async def _handle_tools_call(self, client_id: str, message: MCPMessage) -> MCPMessage:
+            """处理工具调用请求"""
+            params = message.params or {}
+            tool_name = params.get("name")
+            arguments = params.get("arguments", {})
+            
+            if not tool_name:
             raise MCPError(-32602, "Missing tool name")
         
         if not self.security_manager.check_tool_permission(tool_name, client_id):
@@ -471,8 +471,8 @@ class MCPServer:
         
         result = await self.tool_registry.call_tool(tool_name, arguments)
         
-        return MCPMessage(
-            id=message.id,
+                    return MCPMessage(
+                        id=message.id,
             result=result
         )
     
@@ -482,17 +482,17 @@ class MCPServer:
         for resource in self.resource_manager.list_resources():
             if self.security_manager.check_resource_permission(resource.uri, client_id):
                 resources.append(resource.dict())
-        
-        return MCPMessage(
-            id=message.id,
+                
+                return MCPMessage(
+                    id=message.id,
             result={"resources": resources}
-        )
-    
-    async def _handle_resources_read(self, client_id: str, message: MCPMessage) -> MCPMessage:
-        """处理资源读取请求"""
-        params = message.params or {}
-        uri = params.get("uri")
+                )
         
+    async def _handle_resources_read(self, client_id: str, message: MCPMessage) -> MCPMessage:
+            """处理资源读取请求"""
+            params = message.params or {}
+        uri = params.get("uri")
+            
         if not uri:
             raise MCPError(-32602, "Missing resource URI")
         
@@ -501,20 +501,20 @@ class MCPServer:
         
         result = await self.resource_manager.read_resource(uri)
         
-        return MCPMessage(
-            id=message.id,
+                return MCPMessage(
+                    id=message.id,
             result=result
         )
     
     async def _handle_prompts_list(self, client_id: str, message: MCPMessage) -> MCPMessage:
         """处理提示词列表请求"""
         prompts = [prompt.dict() for prompt in self.prompt_manager.list_prompts()]
-        
-        return MCPMessage(
-            id=message.id,
+                
+                return MCPMessage(
+                    id=message.id,
             result={"prompts": prompts}
-        )
-    
+                )
+        
     async def _handle_prompts_get(self, client_id: str, message: MCPMessage) -> MCPMessage:
         """处理提示词获取请求"""
         params = message.params or {}
@@ -526,8 +526,8 @@ class MCPServer:
         
         result = await self.prompt_manager.get_prompt_content(name, arguments)
         
-        return MCPMessage(
-            id=message.id,
+                return MCPMessage(
+                    id=message.id,
             result=result
         )
     
@@ -539,8 +539,8 @@ class MCPServer:
             "error": {
                 "code": code,
                 "message": message
-            }
-        }
+                            }
+                        }
         
         if data:
             error_response["error"]["data"] = data
