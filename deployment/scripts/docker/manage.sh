@@ -74,7 +74,7 @@ check_docker() {
         exit 1
     fi
     
-    if ! command -v docker-compose &> /dev/null; then
+    if ! command -v docker compose &> /dev/null; then
         log_error "Docker Compose 未安装"
         exit 1
     fi
@@ -119,10 +119,10 @@ execute_compose() {
     fi
     
     log_info "使用配置文件: $compose_file"
-    log_step "执行命令: docker-compose -f $compose_file $cmd $*"
+    log_step "执行命令: docker compose -f $compose_file $cmd $*"
     
     cd "$PROJECT_ROOT"
-    docker-compose -f "$compose_file" $cmd "$@"
+    docker compose -f "$compose_file" $cmd "$@"
 }
 
 # 启动服务

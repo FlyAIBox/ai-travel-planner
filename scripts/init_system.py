@@ -254,9 +254,9 @@ async def main():
         print(f"  - Qdrant: {settings.QDRANT_URL}")
         print("="*60)
         print("📝 使用说明:")
-        print("  1. 启动服务: docker-compose -f deployment/docker/docker-compose.dev.yml up -d")
+        print("  1. 启动服务: docker compose -f deployment/docker/docker-compose.dev.yml up -d")
         print("  2. 测试API: curl http://localhost:8000/api/v1/health")
-        print("  3. 查看日志: docker-compose logs -f chat-service")
+        print("  3. 查看日志: docker compose logs -f chat-service")
         print("="*60)
         
     except Exception as e:

@@ -92,13 +92,13 @@ vim .env.prod
 
 ```bash
 # 开发环境
-docker-compose -f deployment/docker/docker-compose.dev.yml up -d --build
+docker compose -f deployment/docker/docker-compose.dev.yml up -d --build
 
 # 生产环境
-docker-compose -f deployment/docker/docker-compose.prod.yml up -d --build
+docker compose -f deployment/docker/docker-compose.prod.yml up -d --build
 
 # 监控服务
-docker-compose -f deployment/docker/docker-compose.monitoring.yml up -d
+docker compose -f deployment/docker/docker-compose.monitoring.yml up -d
 ```
 
 ## 📝 环境说明

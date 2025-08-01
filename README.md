@@ -144,7 +144,7 @@ cd ai-travel-planner
 1. **初始化系统**
 ```bash
 # 启动基础服务
-docker-compose -f deployment/docker/docker-compose.dev.yml up -d redis qdrant mysql
+docker compose -f deployment/docker/docker-compose.dev.yml up -d redis qdrant mysql
 
 # 等待服务启动完成（约30秒）
 sleep 30
@@ -156,10 +156,10 @@ python scripts/init_system.py
 2. **启动所有服务**
 ```bash
 # 启动完整系统
-docker-compose -f deployment/docker/docker-compose.dev.yml up -d
+docker compose -f deployment/docker/docker-compose.dev.yml up -d
 
 # 查看服务状态
-docker-compose -f deployment/docker/docker-compose.dev.yml ps
+docker compose -f deployment/docker/docker-compose.dev.yml ps
 ```
 
 3. **验证系统**

@@ -50,7 +50,7 @@ check_requirements() {
     if command -v docker &> /dev/null && docker compose version &> /dev/null; then
         log_info "使用 Docker Compose v2"
         DOCKER_COMPOSE_CMD="docker compose"
-    elif command -v docker-compose &> /dev/null; then
+    elif command -v docker compose &> /dev/null; then
         log_info "使用 Docker Compose v1"
         DOCKER_COMPOSE_CMD="docker-compose"
     else

@@ -176,12 +176,12 @@ db-reset: install
 # ====================================
 docker-build:
 	@echo "🐳 构建Docker镜像..."
-	docker-compose -f $(DOCKER_COMPOSE_DEV) build
+	docker compose -f $(DOCKER_COMPOSE_DEV) build
 	@echo "✅ Docker镜像构建完成！"
 
 docker-up-dev:
 	@echo "🐳 启动开发环境..."
-	docker-compose -f $(DOCKER_COMPOSE_DEV) up -d
+	docker compose -f $(DOCKER_COMPOSE_DEV) up -d
 	@echo "✅ 开发环境已启动！"
 	@echo "📊 服务访问地址:"
 	@echo "  - API网关: http://localhost:8000"
@@ -191,18 +191,18 @@ docker-up-dev:
 
 docker-up-prod:
 	@echo "🐳 启动生产环境..."
-	docker-compose -f $(DOCKER_COMPOSE_PROD) up -d
+	docker compose -f $(DOCKER_COMPOSE_PROD) up -d
 	@echo "✅ 生产环境已启动！"
 
 docker-down:
 	@echo "🐳 停止所有容器..."
-	docker-compose -f $(DOCKER_COMPOSE_DEV) down
-	docker-compose -f $(DOCKER_COMPOSE_PROD) down 2>/dev/null || true
+	docker compose -f $(DOCKER_COMPOSE_DEV) down
+	docker compose -f $(DOCKER_COMPOSE_PROD) down 2>/dev/null || true
 	@echo "✅ 容器已停止！"
 
 docker-logs:
 	@echo "📋 查看容器日志..."
-	docker-compose -f $(DOCKER_COMPOSE_DEV) logs -f
+	docker compose -f $(DOCKER_COMPOSE_DEV) logs -f
 
 clean-docker:
 	@echo "🧹 清理Docker资源..."

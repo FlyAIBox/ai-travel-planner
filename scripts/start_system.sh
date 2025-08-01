@@ -53,7 +53,7 @@ check_dependencies() {
     fi
     
     # 检查Docker Compose
-    if ! command -v docker-compose &> /dev/null; then
+    if ! command -v docker compose &> /dev/null; then
         log_error "Docker Compose未安装，请先安装Docker Compose"
         exit 1
     fi
@@ -158,15 +158,15 @@ start_system() {
     
     # 拉取镜像
     log_info "拉取必要的Docker镜像..."
-    docker-compose -f "$DOCKER_COMPOSE_FILE" pull
+    docker compose -f "$DOCKER_COMPOSE_FILE" pull
     
     # 构建镜像
     log_info "构建应用镜像..."
-    docker-compose -f "$DOCKER_COMPOSE_FILE" build
+    docker compose -f "$DOCKER_COMPOSE_FILE" build
     
     # 启动服务
     log_info "启动所有服务..."
-    docker-compose -f "$DOCKER_COMPOSE_FILE" up -d
+    docker compose -f "$DOCKER_COMPOSE_FILE" up -d
     
     log_success "系统启动完成"
 }
@@ -230,7 +230,7 @@ show_service_status() {
     
     # Docker容器状态
     echo -e "\n${BLUE}Docker容器状态:${NC}"
-    docker-compose -f "$DOCKER_COMPOSE_FILE" ps
+    docker compose -f "$DOCKER_COMPOSE_FILE" ps
     
     # 健康检查
     echo -e "\n${BLUE}服务健康状态:${NC}"
@@ -308,10 +308,10 @@ show_logs() {
     
     if [ -z "$service" ]; then
         log_info "显示所有服务日志..."
-        docker-compose -f "$DOCKER_COMPOSE_FILE" logs -f
+        docker compose -f "$DOCKER_COMPOSE_FILE" logs -f
     else
         log_info "显示 $service 服务日志..."
-        docker-compose -f "$DOCKER_COMPOSE_FILE" logs -f "$service"
+        docker compose -f "$DOCKER_COMPOSE_FILE" logs -f "$service"
     fi
 }
 
@@ -320,7 +320,7 @@ stop_system() {
     log_info "停止AI Travel Planner系统..."
     
     cd "$PROJECT_ROOT"
-    docker-compose -f "$DOCKER_COMPOSE_FILE" down
+    docker compose -f "$DOCKER_COMPOSE_FILE" down
     
     log_success "系统已停止"
 }
@@ -344,7 +344,7 @@ clean_system() {
         log_info "清理系统..."
         
         cd "$PROJECT_ROOT"
-        docker-compose -f "$DOCKER_COMPOSE_FILE" down -v --rmi all
+        docker compose -f "$DOCKER_COMPOSE_FILE" down -v --rmi all
         
         # 删除数据目录
         if [ -d "$PROJECT_ROOT/data" ]; then

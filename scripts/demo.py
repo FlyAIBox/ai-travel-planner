@@ -274,7 +274,7 @@ class TravelPlannerDemo:
             
         except Exception as e:
             print(f"❌ 演示失败: {e}")
-            print("请确保服务已启动: docker-compose -f deployment/docker/docker-compose.dev.yml up -d")
+            print("请确保服务已启动: docker compose -f deployment/docker/docker-compose.dev.yml up -d")
 
 
 async def main():
