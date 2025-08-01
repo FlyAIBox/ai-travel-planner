@@ -56,7 +56,7 @@ class GatewayStats(BaseModel):
 # 服务配置
 SERVICES = {
     "chat": {
-        "url": "http://chat-service:8000",
+        "url": "http://chat-service:8080",
         "health_endpoint": "/api/v1/health",
         "timeout": 30
     },

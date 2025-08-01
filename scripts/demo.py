@@ -14,7 +14,7 @@ from datetime import datetime
 class TravelPlannerDemo:
     """旅行规划系统演示"""
     
-    def __init__(self, base_url="http://localhost:8000"):
+    def __init__(self, base_url="http://localhost:8080"):
         self.base_url = base_url
         self.user_id = "demo_user"
         self.conversation_id = None
@@ -179,7 +179,7 @@ class TravelPlannerDemo:
         print("🔗 5. WebSocket通信演示")
         print("-" * 40)
         
-        websocket_url = f"ws://localhost:8000/ws/{self.user_id}"
+        websocket_url = f"ws://localhost:8080/ws/{self.user_id}"
         
         try:
             async with websockets.connect(websocket_url) as websocket:

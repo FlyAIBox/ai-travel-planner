@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     DEBUG: bool = Field(default=True, description="调试模式")
     LOG_LEVEL: str = Field(default="INFO", description="日志级别")
     HOST: str = Field(default="0.0.0.0", description="服务主机")
-    PORT: int = Field(default=8000, description="服务端口")
+    PORT: int = Field(default=8080, description="服务端口")
     
     # ==================== 安全配置 ====================
     JWT_SECRET: str = Field(default="your_super_secret_jwt_key_here", description="JWT密钥")

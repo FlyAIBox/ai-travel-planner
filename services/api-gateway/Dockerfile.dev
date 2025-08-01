@@ -29,7 +29,7 @@ ENV PYTHONUNBUFFERED=1
 ENV ENV=development
 
 # 暴露端口
-EXPOSE 8000
+EXPOSE 8080
 
 # 开发模式启动命令（支持热重载）
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"] 
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"] 

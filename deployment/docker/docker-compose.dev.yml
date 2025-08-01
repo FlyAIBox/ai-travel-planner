@@ -56,7 +56,7 @@ services:
       dockerfile: services/chat-service/Dockerfile
     container_name: ai-travel-chat-dev
     ports:
-      - "8000:8000"
+      - "8080:8080"
     environment:
       - ENVIRONMENT=development
       - DEBUG=true
@@ -83,7 +83,7 @@ services:
     networks:
       - ai-travel-network
     restart: unless-stopped
-    command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
 
   # RAG服务
   rag-service:
@@ -180,7 +180,7 @@ services:
     environment:
       - ENVIRONMENT=development
       - DEBUG=true
-      - CHAT_SERVICE_URL=http://chat-service:8000
+      - CHAT_SERVICE_URL=http://chat-service:8080
       - RAG_SERVICE_URL=http://rag-service:8001
       - AGENT_SERVICE_URL=http://agent-service:8002
       - USER_SERVICE_URL=http://user-service:8003

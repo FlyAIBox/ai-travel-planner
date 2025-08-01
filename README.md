@@ -165,26 +165,26 @@ docker compose -f deployment/docker/docker-compose.dev.yml ps
 3. **验证系统**
 ```bash
 # 检查各服务健康状态
-curl http://localhost:8000/api/v1/health  # Chat服务
+curl http://localhost:8080/api/v1/health  # Chat服务
 curl http://localhost:8001/api/v1/health  # RAG服务
 curl http://localhost:8002/api/v1/health  # 智能体服务
 curl http://localhost:8003/api/v1/health  # 用户服务
 curl http://localhost:8080/gateway/health # API网关
 
 # 检查MCP工具列表
-curl http://localhost:8000/api/v1/mcp/tools
+curl http://localhost:8080/api/v1/mcp/tools
 
 # 测试聊天API
-curl -X POST http://localhost:8000/api/v1/chat \
+curl -X POST http://localhost:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"content": "我想去北京旅游", "user_id": "test_user"}'
 ```
 
 ### 服务端点
 
-- **Chat服务**: http://localhost:8000
-  - API文档: http://localhost:8000/docs
-  - WebSocket: ws://localhost:8000/ws/{user_id}
+- **Chat服务**: http://localhost:8080
+  - API文档: http://localhost:8080/docs
+  - WebSocket: ws://localhost:8080/ws/{user_id}
 - **向量数据库**: http://localhost:6333
 - **Redis缓存**: localhost:6379
 - **MySQL数据库**: localhost:3306

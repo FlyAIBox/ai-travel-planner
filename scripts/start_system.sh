@@ -71,7 +71,7 @@ check_dependencies() {
 check_ports() {
     log_info "检查端口占用情况..."
     
-    PORTS=(8000 8001 8002 8003 8080 3306 6379 6333 5678 9090 3000)
+    PORTS=(8080 8001 8002 8003 8080 3306 6379 6333 5678 9090 3000)
     OCCUPIED_PORTS=()
     
     for port in "${PORTS[@]}"; do
@@ -180,7 +180,7 @@ wait_for_services() {
     SERVICES["Redis"]="redis:6379"
     SERVICES["MySQL"]="mysql:3306"
     SERVICES["Qdrant"]="qdrant:6333"
-    SERVICES["Chat服务"]="localhost:8000/api/v1/health"
+    SERVICES["Chat服务"]="localhost:8080/api/v1/health"
     SERVICES["RAG服务"]="localhost:8001/api/v1/health"
     SERVICES["智能体服务"]="localhost:8002/api/v1/health"
     SERVICES["用户服务"]="localhost:8003/api/v1/health"
@@ -236,7 +236,7 @@ show_service_status() {
     echo -e "\n${BLUE}服务健康状态:${NC}"
     
     declare -A HEALTH_ENDPOINTS
-    HEALTH_ENDPOINTS["Chat服务"]="http://localhost:8000/api/v1/health"
+    HEALTH_ENDPOINTS["Chat服务"]="http://localhost:8080/api/v1/health"
     HEALTH_ENDPOINTS["RAG服务"]="http://localhost:8001/api/v1/health"
     HEALTH_ENDPOINTS["智能体服务"]="http://localhost:8002/api/v1/health"
     HEALTH_ENDPOINTS["用户服务"]="http://localhost:8003/api/v1/health"
@@ -259,7 +259,7 @@ show_access_info() {
     echo "           系统访问信息"
     echo -e "========================================${NC}"
     echo "🌐 API网关:          http://localhost:8080"
-    echo "💬 聊天服务:         http://localhost:8000"
+    echo "💬 聊天服务:         http://localhost:8080"
     echo "🔍 RAG服务:          http://localhost:8001"
     echo "🤖 智能体服务:       http://localhost:8002"
     echo "👤 用户服务:         http://localhost:8003"
@@ -268,7 +268,7 @@ show_access_info() {
     echo "📈 Grafana:         http://localhost:3000"
     echo
     echo "📚 API文档:"
-    echo "  - Chat服务:        http://localhost:8000/docs"
+    echo "  - Chat服务:        http://localhost:8080/docs"
     echo "  - RAG服务:         http://localhost:8001/docs"
     echo "  - 智能体服务:      http://localhost:8002/docs"
     echo "  - 用户服务:        http://localhost:8003/docs"

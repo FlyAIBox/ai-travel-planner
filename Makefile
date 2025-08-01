@@ -184,7 +184,7 @@ docker-up-dev:
 	docker compose -f $(DOCKER_COMPOSE_DEV) up -d
 	@echo "✅ 开发环境已启动！"
 	@echo "📊 服务访问地址:"
-	@echo "  - API网关: http://localhost:8000"
+	@echo "  - API网关: http://localhost:8080"
 	@echo "  - Jupyter: http://localhost:8888"
 	@echo "  - n8n: http://localhost:5678"
 	@echo "  - pgAdmin: http://localhost:5050"
@@ -215,7 +215,7 @@ clean-docker:
 # ====================================
 run-dev:
 	@echo "🚀 启动开发服务器..."
-	cd services/api-gateway && $(UVICORN) main:app --reload --host 0.0.0.0 --port 8000
+	cd services/api-gateway && $(UVICORN) main:app --reload --host 0.0.0.0 --port 8080
 
 run-jupyter: install-dev
 	@echo "📓 启动Jupyter Lab..."

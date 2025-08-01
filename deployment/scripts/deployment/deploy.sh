@@ -248,7 +248,7 @@ start_applications() {
     sleep 30
     
     # 检查服务健康状态
-    local services=("api-gateway-prod:8000" "chat-service-prod:8001" "agent-service-prod:8002" "rag-service-prod:8003" "user-service-prod:8004")
+    local services=("api-gateway-prod:8080" "chat-service-prod:8001" "agent-service-prod:8002" "rag-service-prod:8003" "user-service-prod:8004")
     
     for service in "${services[@]}"; do
         local service_name=$(echo $service | cut -d: -f1)
