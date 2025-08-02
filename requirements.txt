@@ -100,7 +100,7 @@ slowapi==0.1.9
 orjson==3.10.12
 
 # 工作流
-n8n-sdk==0.1.0
+# https://docs.n8n.io/api/using-api-playground/
 
 # 其他工具
 click==8.1.8

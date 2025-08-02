@@ -7,12 +7,11 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, Optional, Any, Set
 from dataclasses import dataclass, asdict
 from enum import Enum
-import weakref
 
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 import redis.asyncio as redis
 from pydantic import BaseModel, Field
 
@@ -103,14 +102,26 @@ class WebSocketManager:
                 host=settings.REDIS_HOST,
                 port=settings.REDIS_PORT,
                 password=settings.REDIS_PASSWORD,
-                db=settings.REDIS_DB,
+                db=settings.REDIS_DB_SESSION,
                 decode_responses=True
             )
             return client
         except Exception as e:
             logger.error(f"Redis连接失败: {e}")
             return None
-    
+
+    def start(self):
+        """启动WebSocket管理器"""
+        logger.info("WebSocket管理器已启动")
+        # 这里可以添加启动时的初始化逻辑
+        pass
+
+    def stop(self):
+        """停止WebSocket管理器"""
+        logger.info("WebSocket管理器已停止")
+        # 这里可以添加停止时的清理逻辑
+        pass
+
     async def start_background_tasks(self):
         """启动后台任务"""
         if not self._heartbeat_task:
@@ -131,12 +142,12 @@ class WebSocketManager:
         
         connection_id = str(uuid.uuid4())
         now = datetime.now()
-            
-            connection = WebSocketConnection(
-                connection_id=connection_id,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                websocket=websocket,
+
+        connection = WebSocketConnection(
+            connection_id=connection_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            websocket=websocket,
             connected_at=now,
             last_activity=now,
                 status=ConnectionStatus.CONNECTED,
@@ -169,10 +180,10 @@ class WebSocketManager:
                 "user_id": user_id,
                 "conversation_id": conversation_id
             }
-            })
-            
-            logger.info(f"WebSocket连接建立: {connection_id}, 用户: {user_id}")
-            return connection_id
+        })
+
+        logger.info(f"WebSocket连接建立: {connection_id}, 用户: {user_id}")
+        return connection_id
             
     async def disconnect(self, connection_id: str, reason: str = "unknown"):
         """断开WebSocket连接"""
@@ -390,7 +401,8 @@ class WebSocketManager:
     
     async def _handle_heartbeat(self, connection: WebSocketConnection, message: WebSocketMessage):
         """处理心跳消息"""
-        
+        _ = message  # 占位符，避免未使用参数警告
+
         await self.send_to_connection(connection.connection_id, {
             "type": MessageTypeWS.HEARTBEAT.value,
             "content": {"status": "alive", "server_time": datetime.now().isoformat()}
@@ -444,8 +456,8 @@ class WebSocketManager:
                 # 清理Redis中的过期连接记录
                 if self.redis_client:
                     cutoff_time = datetime.now() - timedelta(hours=24)
-                    # 这里可以添加Redis清理逻辑
-                    pass
+                    # TODO: 添加Redis清理逻辑
+                    _ = cutoff_time  # 占位符，避免未使用变量警告
                     
             except Exception as e:
                 logger.error(f"清理任务错误: {e}")

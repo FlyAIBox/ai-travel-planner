@@ -3,13 +3,21 @@ Chat服务主入口
 整合上下文工程、对话管理、WebSocket通信、MCP服务器等组件
 """
 
+import sys
+from pathlib import Path
+
+# 添加项目根目录到Python路径
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import asyncio
 import json
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import redis.asyncio as redis
@@ -18,7 +26,7 @@ from pydantic import BaseModel, Field
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
 from .context_engine import get_context_engine
-from .websocket_manager import get_websocket_manager, WebSocketManager
+from .websocket_manager import get_websocket_manager
 from .conversation_manager import get_conversation_manager, MessageType, ConversationStatus
 from .mcp_server import get_mcp_server
 from .mcp_tools import create_mcp_tools
@@ -65,7 +73,7 @@ async def get_redis_client():
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
         password=settings.REDIS_PASSWORD,
-        db=settings.REDIS_DB,
+        db=settings.REDIS_DB_SESSION,  # 使用会话数据库
         decode_responses=True
     )
 
@@ -89,18 +97,15 @@ async def lifespan(app: FastAPI):
     websocket_manager.start()
     
     # 注册MCP工具
-    tools, tool_cache, tool_monitor = create_mcp_tools(redis_client)
-    for tool in tools:
-        mcp_server.tool_registry.register_tool(tool)
-    
+    create_mcp_tools()
+    # MCP工具已经在create_mcp_tools中注册到服务器了
+
     # 存储到应用状态
     app.state.redis_client = redis_client
     app.state.context_engine = context_engine
     app.state.conversation_manager = conversation_manager
     app.state.websocket_manager = websocket_manager
     app.state.mcp_server = mcp_server
-    app.state.tool_cache = tool_cache
-    app.state.tool_monitor = tool_monitor
     
     logger.info("Chat服务启动完成")
     
@@ -136,7 +141,8 @@ app.add_middleware(
 async def websocket_endpoint(websocket: WebSocket, user_id: str, conversation_id: Optional[str] = None):
     """WebSocket连接端点"""
     connection_id = None
-    
+    websocket_manager = app.state.websocket_manager
+
     try:
         # 建立连接
         connection_id = await websocket_manager.connect(
@@ -195,7 +201,7 @@ async def chat(message: ChatMessage, background_tasks: BackgroundTasks):
             )
         
         # 添加用户消息
-        user_message = await conversation_manager.add_message(
+        await conversation_manager.add_message(
             conversation_id=message.conversation_id,
             content=message.content,
             message_type=MessageType.USER_TEXT,
@@ -519,7 +525,9 @@ async def generate_ai_response(user_input: str, context: str) -> str:
     """生成AI响应（模拟实现）"""
     # 这里应该调用真实的AI模型
     # 为了演示，返回简单的响应
-    
+    # TODO: 使用context参数来提供更智能的响应
+    _ = context  # 占位符，避免未使用参数警告
+
     await asyncio.sleep(0.5)  # 模拟处理时间
     
     if "机票" in user_input or "航班" in user_input:

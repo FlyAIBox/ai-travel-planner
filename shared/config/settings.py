@@ -7,7 +7,7 @@ import os
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +18,9 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore"
+        extra="ignore",
+        env_parse_none_str="None",
+        env_parse_enums=True
     )
     
     # ==================== 应用基础配置 ====================
@@ -42,6 +44,20 @@ class Settings(BaseSettings):
     # CORS和主机配置
     ALLOWED_HOSTS: List[str] = Field(default=["*"], description="允许的主机")
     CORS_ORIGINS: List[str] = Field(default=["*"], description="CORS源")
+
+    @field_validator('ALLOWED_HOSTS', 'CORS_ORIGINS', mode='before')
+    @classmethod
+    def parse_comma_separated_list(cls, v):
+        """解析逗号分隔的字符串为列表"""
+        if isinstance(v, str):
+            # 如果是逗号分隔的字符串，分割为列表
+            if ',' in v:
+                return [item.strip() for item in v.split(',') if item.strip()]
+            # 如果是单个值，返回包含该值的列表
+            return [v.strip()] if v.strip() else []
+        elif isinstance(v, list):
+            return v
+        return v
     
     # ==================== 数据库配置 ====================
     DATABASE_URL: str = Field(
