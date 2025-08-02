@@ -1,5 +1,6 @@
 import React from 'react'
 import { Layout, Menu, Avatar, Dropdown, Space } from 'antd'
+import type { MenuProps } from 'antd'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { 
   HomeOutlined, 
@@ -39,7 +40,7 @@ const MainLayout: React.FC = () => {
     }
   ]
 
-  const userMenuItems = [
+  const userMenuItems: MenuProps['items'] = [
     {
       key: 'profile',
       icon: <UserOutlined />,
@@ -56,7 +57,8 @@ const MainLayout: React.FC = () => {
     {
       key: 'logout',
       icon: <LogoutOutlined />,
-      label: '退出登录'
+      label: '退出登录',
+      danger: true
     }
   ]
 
@@ -64,10 +66,11 @@ const MainLayout: React.FC = () => {
     navigate(key)
   }
 
-  const handleUserMenuClick = ({ key }: { key: string }) => {
+  const handleUserMenuClick: MenuProps['onClick'] = ({ key }) => {
     if (key === 'logout') {
       // 处理退出登录
-      console.log('退出登录')
+      localStorage.removeItem('token')
+      navigate('/login')
     } else {
       navigate(`/user/${key}`)
     }
