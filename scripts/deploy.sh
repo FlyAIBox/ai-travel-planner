@@ -1,15 +1,9 @@
 #!/bin/bash
 
 # AI Travel Planner 部署脚本
-# 支持开发、测试和生产环境的一键部署
+# 支持开发、测试、生产环境的一键部署
 
-set -e  # 遇到错误立即退出
-
-# ==================== 配置变量 ====================
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-LOG_FILE="$PROJECT_ROOT/deploy.log"
+set -e
 
 # 颜色输出
 RED='\033[0;31m'
@@ -20,863 +14,101 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# 项目信息
+PROJECT_NAME="ai-travel-planner"
+PROJECT_VERSION="2.0.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
 # 默认配置
 ENVIRONMENT="development"
-SKIP_BUILD=false
-SKIP_TESTS=false
-FORCE_RECREATE=false
-CLEANUP_VOLUMES=false
+SERVICES="all"
 ENABLE_MONITORING=true
 ENABLE_LOGGING=true
-
-# ==================== 帮助函数 ====================
-
-log() {
-    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')] $1${NC}" | tee -a "$LOG_FILE"
-}
-
-warn() {
-    echo -e "${YELLOW}[$(date +'%Y-%m-%d %H:%M:%S')] WARNING: $1${NC}" | tee -a "$LOG_FILE"
-}
-
-error() {
-    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR: $1${NC}" | tee -a "$LOG_FILE"
-}
-
-info() {
-    echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')] INFO: $1${NC}" | tee -a "$LOG_FILE"
-}
+FORCE_REBUILD=false
+SKIP_TESTS=false
+QUICK_START=false
 
 # 显示帮助信息
 show_help() {
     cat << EOF
-AI Travel Planner 部署脚本
+AI Travel Planner 部署脚本 v${PROJECT_VERSION}
 
 用法: $0 [选项]
 
 选项:
-    -e, --env ENV              设置环境 (development|staging|production) [默认: development]
-    -s, --skip-build           跳过Docker镜像构建
-    -t, --skip-tests           跳过测试运行
-    -f, --force-recreate       强制重新创建所有容器
-    -c, --cleanup-volumes      清理所有数据卷（危险操作！）
-    --no-monitoring            禁用监控服务
-    --no-logging               禁用日志服务
-    -h, --help                 显示此帮助信息
-
-环境说明:
-    development               开发环境，启用热重载和调试功能
-    staging                   测试环境，模拟生产配置
-    production                生产环境，优化性能和安全性
+  -e, --environment <env>     指定环境 (development|testing|production) [默认: development]
+  -s, --services <services>   指定要部署的服务 (all|core|frontend|monitoring) [默认: all]
+  -m, --enable-monitoring     启用监控系统 (prometheus, grafana) [默认: true]
+  -l, --enable-logging        启用日志系统 (elk stack) [默认: true]
+  -f, --force-rebuild         强制重新构建所有镜像
+  -t, --skip-tests           跳过测试
+  -q, --quick-start          快速启动 (仅核心服务)
+  -h, --help                 显示此帮助信息
 
 示例:
-    $0                        # 使用默认开发环境部署
-    $0 -e production -f       # 生产环境强制重新部署
-    $0 -s -t                  # 跳过构建和测试的快速部署
+  $0                                          # 开发环境完整部署
+  $0 -e production -f                        # 生产环境强制重新构建
+  $0 -e testing -s core --skip-tests        # 测试环境仅部署核心服务
+  $0 -q                                      # 快速启动核心服务
+
+环境说明:
+  development - 开发环境，启用热重载和调试功能
+  testing     - 测试环境，包含测试数据和工具
+  production  - 生产环境，优化性能和安全性
+
+服务说明:
+  all        - 所有服务 (核心服务 + 前端 + 监控 + 日志)
+  core       - 核心服务 (API网关, 聊天服务, RAG服务等)
+  frontend   - 前端服务
+  monitoring - 监控服务 (Prometheus, Grafana)
+  logging    - 日志服务 (ELK Stack)
 
 EOF
 }
 
-# ==================== 环境检查 ====================
-
-check_prerequisites() {
-    log "🔍 检查系统环境..."
-    
-    # 检查操作系统
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        OS="linux"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        OS="macos"
-    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]]; then
-        OS="windows"
-    else
-        error "不支持的操作系统: $OSTYPE"
-        exit 1
-    fi
-    
-    info "检测到操作系统: $OS"
-    
-    # 检查 Docker
-    if ! command -v docker &> /dev/null; then
-        error "Docker 未安装。请访问 https://docs.docker.com/get-docker/ 安装"
-        exit 1
-    fi
-    
-    # 检查 Docker 版本
-    DOCKER_VERSION=$(docker --version | grep -oE '[0-9]+\.[0-9]+')
-    REQUIRED_DOCKER_VERSION="20.10"
-    
-    if [ "$(printf '%s\n' "$REQUIRED_DOCKER_VERSION" "$DOCKER_VERSION" | sort -V | head -n1)" != "$REQUIRED_DOCKER_VERSION" ]; then
-        warn "Docker 版本 ($DOCKER_VERSION) 可能过低，建议使用 $REQUIRED_DOCKER_VERSION 或更高版本"
-    fi
-    
-    # 检查 Docker Compose
-    if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-        error "Docker Compose 未安装。请安装 Docker Compose"
-        exit 1
-    fi
-    
-    # 检查 Docker 守护进程
-    if ! docker info &> /dev/null; then
-        error "Docker 守护进程未运行。请启动 Docker"
-        exit 1
-    fi
-    
-    # 检查系统资源
-    check_system_resources
-    
-    log "✅ 环境检查完成"
-}
-
-check_system_resources() {
-    info "检查系统资源..."
-    
-    # 检查内存
-    if [[ "$OS" == "linux" ]]; then
-        TOTAL_MEM=$(free -m | awk 'NR==2{printf "%.0f", $2/1024}')
-        AVAILABLE_MEM=$(free -m | awk 'NR==2{printf "%.0f", $7/1024}')
-    elif [[ "$OS" == "macos" ]]; then
-        TOTAL_MEM=$(system_profiler SPHardwareDataType | awk '/Memory/ {print int($2)}')
-        AVAILABLE_MEM=$TOTAL_MEM  # 简化处理
-    fi
-    
-    info "系统内存: ${TOTAL_MEM}GB"
-    
-    if [ "$TOTAL_MEM" -lt 8 ]; then
-        warn "系统内存不足 8GB，可能影响性能"
-    fi
-    
-    # 检查磁盘空间
-    AVAILABLE_DISK=$(df -h "$PROJECT_ROOT" | awk 'NR==2 {print $4}' | sed 's/G//')
-    
-    if [ "$AVAILABLE_DISK" -lt 20 ]; then
-        warn "磁盘可用空间不足 20GB，建议清理磁盘空间"
-    fi
-    
-    info "可用磁盘空间: ${AVAILABLE_DISK}GB"
-}
-
-# ==================== 环境配置 ====================
-
-setup_environment() {
-    log "🔧 配置环境变量..."
-    
-    # 创建环境配置文件
-    ENV_FILE="$PROJECT_ROOT/.env.${ENVIRONMENT}"
-    
-    if [ ! -f "$ENV_FILE" ]; then
-        warn "环境配置文件不存在，创建默认配置: $ENV_FILE"
-        create_env_file "$ENV_FILE"
-    fi
-    
-    # 复制到主配置文件
-    cp "$ENV_FILE" "$PROJECT_ROOT/.env"
-    
-    info "使用环境配置: $ENV_FILE"
-}
-
-create_env_file() {
-    local env_file=$1
-    
-    cat > "$env_file" << EOF
-# AI Travel Planner Environment Configuration
-ENVIRONMENT=$ENVIRONMENT
-
-# 数据库配置
-DATABASE_URL=postgresql://travel_user:travel_password_2024@postgres:5432/ai_travel_planner
-POSTGRES_DB=ai_travel_planner
-POSTGRES_USER=travel_user
-POSTGRES_PASSWORD=travel_password_2024
-
-# Redis配置
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_PASSWORD=redis_password_2024
-
-# API密钥 (请在生产环境中修改)
-OPENAI_API_KEY=your_openai_api_key_here
-FLIGHT_API_KEY=your_flight_api_key_here
-HOTEL_API_KEY=your_hotel_api_key_here
-WEATHER_API_KEY=your_weather_api_key_here
-
-# JWT配置
-JWT_SECRET=your_jwt_secret_key_2024
-
-# 应用配置
-LOG_LEVEL=info
-DEBUG=$( [ "$ENVIRONMENT" = "development" ] && echo "true" || echo "false" )
-
-# 监控配置
-ENABLE_MONITORING=$ENABLE_MONITORING
-ENABLE_LOGGING=$ENABLE_LOGGING
-
-# 服务端口配置
-API_GATEWAY_PORT=8000
-CHAT_SERVICE_PORT=8001
-RAG_SERVICE_PORT=8002
-AGENT_SERVICE_PORT=8003
-PLANNING_SERVICE_PORT=8004
-INTEGRATION_SERVICE_PORT=8005
-USER_SERVICE_PORT=8006
-FRONTEND_PORT=3000
-
-EOF
-    
-    info "已创建环境配置文件: $env_file"
-}
-
-# ==================== 目录结构 ====================
-
-setup_directories() {
-    log "📁 创建必要的目录结构..."
-    
-    # 创建日志目录
-    mkdir -p "$PROJECT_ROOT/logs"
-    mkdir -p "$PROJECT_ROOT/logs/services"
-    mkdir -p "$PROJECT_ROOT/logs/nginx"
-    
-    # 创建数据目录
-    mkdir -p "$PROJECT_ROOT/data/documents"
-    mkdir -p "$PROJECT_ROOT/data/uploads"
-    mkdir -p "$PROJECT_ROOT/data/exports"
-    
-    # 创建配置目录
-    mkdir -p "$PROJECT_ROOT/config/nginx"
-    mkdir -p "$PROJECT_ROOT/config/redis"
-    mkdir -p "$PROJECT_ROOT/config/qdrant"
-    
-    # 创建监控配置目录
-    mkdir -p "$PROJECT_ROOT/monitoring/prometheus"
-    mkdir -p "$PROJECT_ROOT/monitoring/grafana/dashboards"
-    mkdir -p "$PROJECT_ROOT/monitoring/grafana/datasources"
-    mkdir -p "$PROJECT_ROOT/monitoring/logstash/pipeline"
-    
-    # 创建SSL证书目录
-    mkdir -p "$PROJECT_ROOT/ssl"
-    
-    # 设置权限
-    chmod 755 "$PROJECT_ROOT/logs"
-    chmod 755 "$PROJECT_ROOT/data"
-    
-    info "目录结构创建完成"
-}
-
-# ==================== 配置文件生成 ====================
-
-generate_config_files() {
-    log "📝 生成配置文件..."
-    
-    # Nginx配置
-    generate_nginx_config
-    
-    # Prometheus配置
-    generate_prometheus_config
-    
-    # Grafana数据源配置
-    generate_grafana_config
-    
-    # Logstash配置
-    generate_logstash_config
-    
-    info "配置文件生成完成"
-}
-
-generate_nginx_config() {
-    cat > "$PROJECT_ROOT/nginx/nginx.conf" << 'EOF'
-events {
-    worker_connections 1024;
-}
-
-http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
-
-    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                   '$status $body_bytes_sent "$http_referer" '
-                   '"$http_user_agent" "$http_x_forwarded_for"';
-
-    access_log /var/log/nginx/access.log main;
-    error_log /var/log/nginx/error.log warn;
-
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-
-    # Gzip压缩
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types
-        text/plain
-        text/css
-        text/xml
-        text/javascript
-        application/json
-        application/javascript
-        application/xml+rss
-        application/atom+xml
-        image/svg+xml;
-
-    # 上游服务器配置
-    upstream api_gateway {
-        server api-gateway:8000;
-    }
-
-    upstream frontend {
-        server frontend:3000;
-    }
-
-    # 主服务器配置
-    server {
-        listen 80;
-        server_name localhost;
-
-        # 前端应用
-        location / {
-            proxy_pass http://frontend;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
-
-        # API路由
-        location /api/ {
-            proxy_pass http://api_gateway;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            
-            # WebSocket支持
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-        }
-
-        # 健康检查
-        location /health {
-            access_log off;
-            return 200 "healthy\n";
-            add_header Content-Type text/plain;
-        }
-    }
-}
-EOF
-}
-
-generate_prometheus_config() {
-    cat > "$PROJECT_ROOT/monitoring/prometheus.yml" << 'EOF'
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-rule_files:
-  # - "first_rules.yml"
-  # - "second_rules.yml"
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-
-  - job_name: 'api-gateway'
-    static_configs:
-      - targets: ['api-gateway:8000']
-    metrics_path: '/metrics'
-
-  - job_name: 'chat-service'
-    static_configs:
-      - targets: ['chat-service:8001']
-    metrics_path: '/metrics'
-
-  - job_name: 'rag-service'
-    static_configs:
-      - targets: ['rag-service:8002']
-    metrics_path: '/metrics'
-
-  - job_name: 'agent-service'
-    static_configs:
-      - targets: ['agent-service:8003']
-    metrics_path: '/metrics'
-
-  - job_name: 'planning-service'
-    static_configs:
-      - targets: ['planning-service:8004']
-    metrics_path: '/metrics'
-
-  - job_name: 'integration-service'
-    static_configs:
-      - targets: ['integration-service:8005']
-    metrics_path: '/metrics'
-
-  - job_name: 'user-service'
-    static_configs:
-      - targets: ['user-service:8006']
-    metrics_path: '/metrics'
-
-  - job_name: 'postgres'
-    static_configs:
-      - targets: ['postgres:5432']
-
-  - job_name: 'redis'
-    static_configs:
-      - targets: ['redis:6379']
-EOF
-}
-
-generate_grafana_config() {
-    # Grafana数据源配置
-    cat > "$PROJECT_ROOT/monitoring/grafana/datasources/prometheus.yml" << 'EOF'
-apiVersion: 1
-
-datasources:
-  - name: Prometheus
-    type: prometheus
-    access: proxy
-    url: http://prometheus:9090
-    isDefault: true
-    editable: true
-EOF
-
-    # Grafana仪表板配置
-    cat > "$PROJECT_ROOT/monitoring/grafana/dashboards/dashboard.yml" << 'EOF'
-apiVersion: 1
-
-providers:
-  - name: 'ai-travel-planner'
-    orgId: 1
-    folder: ''
-    type: file
-    disableDeletion: false
-    updateIntervalSeconds: 10
-    options:
-      path: /etc/grafana/provisioning/dashboards
-EOF
-}
-
-generate_logstash_config() {
-    cat > "$PROJECT_ROOT/monitoring/logstash/pipeline/logstash.conf" << 'EOF'
-input {
-  file {
-    path => "/usr/share/logstash/logs/*.log"
-    start_position => "beginning"
-    sincedb_path => "/dev/null"
-  }
-}
-
-filter {
-  if [message] =~ /^\[/ {
-    grok {
-      match => { "message" => "\[%{TIMESTAMP_ISO8601:timestamp}\] %{WORD:level}: %{GREEDYDATA:msg}" }
-    }
-    
-    date {
-      match => [ "timestamp", "yyyy-MM-dd HH:mm:ss" ]
-    }
-  }
-}
-
-output {
-  elasticsearch {
-    hosts => ["elasticsearch-log:9200"]
-    index => "ai-travel-planner-%{+YYYY.MM.dd}"
-  }
-  
-  stdout {
-    codec => rubydebug
-  }
-}
-EOF
-}
-
-# ==================== 构建和部署 ====================
-
-build_images() {
-    if [ "$SKIP_BUILD" = true ]; then
-        info "跳过Docker镜像构建"
-        return
-    fi
-    
-    log "🔨 构建Docker镜像..."
-    
-    # 获取Git提交哈希作为标签
-    GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "latest")
-    
-    # 构建参数
-    BUILD_ARGS="--build-arg ENVIRONMENT=$ENVIRONMENT --build-arg BUILD_VERSION=$GIT_HASH"
-    
-    # 构建服务镜像
-    info "构建后端服务镜像..."
-    docker-compose build $BUILD_ARGS
-    
-    # 构建前端镜像
-    info "构建前端镜像..."
-    cd "$PROJECT_ROOT/frontend"
-    docker build -t ai-travel-frontend:$GIT_HASH .
-    cd "$PROJECT_ROOT"
-    
-    log "✅ Docker镜像构建完成"
-}
-
-run_tests() {
-    if [ "$SKIP_TESTS" = true ]; then
-        info "跳过测试运行"
-        return
-    fi
-    
-    log "🧪 运行测试..."
-    
-    # 运行后端测试
-    info "运行后端测试..."
-    python -m pytest tests/ -v --tb=short
-    
-    # 运行前端测试
-    info "运行前端测试..."
-    cd "$PROJECT_ROOT/frontend"
-    npm test -- --watchAll=false --coverage
-    cd "$PROJECT_ROOT"
-    
-    log "✅ 测试运行完成"
-}
-
-deploy_services() {
-    log "🚀 部署服务..."
-    
-    # Docker Compose参数
-    COMPOSE_ARGS=""
-    
-    if [ "$FORCE_RECREATE" = true ]; then
-        COMPOSE_ARGS="$COMPOSE_ARGS --force-recreate"
-    fi
-    
-    if [ "$CLEANUP_VOLUMES" = true ]; then
-        warn "清理数据卷（这将删除所有数据！）"
-        docker-compose down -v
-        COMPOSE_ARGS="$COMPOSE_ARGS --renew-anon-volumes"
-    fi
-    
-    # 部署核心服务
-    info "启动核心服务..."
-    docker-compose up -d postgres redis qdrant $COMPOSE_ARGS
-    
-    # 等待数据库启动
-    wait_for_service "postgres" "5432"
-    wait_for_service "redis" "6379"
-    wait_for_service "qdrant" "6333"
-    
-    # 运行数据库迁移
-    run_migrations
-    
-    # 启动后端服务
-    info "启动后端服务..."
-    docker-compose up -d \
-        api-gateway \
-        chat-service \
-        rag-service \
-        agent-service \
-        planning-service \
-        integration-service \
-        user-service \
-        $COMPOSE_ARGS
-    
-    # 启动前端服务
-    info "启动前端服务..."
-    docker-compose up -d frontend $COMPOSE_ARGS
-    
-    # 启动监控服务
-    if [ "$ENABLE_MONITORING" = true ]; then
-        info "启动监控服务..."
-        docker-compose up -d prometheus grafana jaeger $COMPOSE_ARGS
-    fi
-    
-    # 启动日志服务
-    if [ "$ENABLE_LOGGING" = true ]; then
-        info "启动日志服务..."
-        docker-compose up -d elasticsearch-log logstash kibana $COMPOSE_ARGS
-    fi
-    
-    # 启动工具服务
-    info "启动工具服务..."
-    docker-compose up -d nginx minio adminer redis-commander $COMPOSE_ARGS
-    
-    # 启动任务队列
-    info "启动任务队列..."
-    docker-compose up -d celery-worker celery-beat flower $COMPOSE_ARGS
-    
-    log "✅ 服务部署完成"
-}
-
-run_migrations() {
-    log "📊 运行数据库迁移..."
-    
-    # 等待PostgreSQL完全启动
-    sleep 10
-    
-    # 运行迁移脚本
-    docker-compose exec -T postgres psql -U travel_user -d ai_travel_planner -c "
-        CREATE SCHEMA IF NOT EXISTS travel;
-        
-        -- 用户表
-        CREATE TABLE IF NOT EXISTS travel.users (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            username VARCHAR(50) UNIQUE NOT NULL,
-            email VARCHAR(100) UNIQUE NOT NULL,
-            password_hash VARCHAR(255) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        -- 旅行计划表
-        CREATE TABLE IF NOT EXISTS travel.plans (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            user_id UUID REFERENCES travel.users(id),
-            name VARCHAR(200) NOT NULL,
-            description TEXT,
-            start_date DATE NOT NULL,
-            end_date DATE NOT NULL,
-            status VARCHAR(20) DEFAULT 'draft',
-            total_cost DECIMAL(10,2) DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        -- 会话表
-        CREATE TABLE IF NOT EXISTS travel.conversations (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            user_id UUID REFERENCES travel.users(id),
-            title VARCHAR(200),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        -- 创建索引
-        CREATE INDEX IF NOT EXISTS idx_users_email ON travel.users(email);
-        CREATE INDEX IF NOT EXISTS idx_plans_user_id ON travel.plans(user_id);
-        CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON travel.conversations(user_id);
-    "
-    
-    info "数据库迁移完成"
-}
-
-# ==================== 健康检查 ====================
-
-wait_for_service() {
-    local service=$1
-    local port=$2
-    local max_attempts=30
-    local attempt=1
-    
-    info "等待服务 $service:$port 启动..."
-    
-    while [ $attempt -le $max_attempts ]; do
-        if docker-compose exec -T "$service" nc -z localhost "$port" 2>/dev/null; then
-            info "服务 $service:$port 已启动"
-            return 0
-        fi
-        
-        echo -n "."
-        sleep 2
-        attempt=$((attempt + 1))
-    done
-    
-    error "服务 $service:$port 启动失败"
-    return 1
-}
-
-health_check() {
-    log "🏥 执行健康检查..."
-    
-    local services=(
-        "http://localhost:8000/health:API网关"
-        "http://localhost:8001/health:聊天服务"
-        "http://localhost:8002/health:RAG服务"
-        "http://localhost:8003/health:智能体服务"
-        "http://localhost:8004/health:规划服务"
-        "http://localhost:8005/health:集成服务"
-        "http://localhost:8006/health:用户服务"
-        "http://localhost:3000:前端应用"
-    )
-    
-    local failed_services=()
-    
-    for service_info in "${services[@]}"; do
-        IFS=':' read -r url name <<< "$service_info"
-        
-        if curl -f -s --max-time 10 "$url" >/dev/null 2>&1; then
-            info "✅ $name - 健康"
-        else
-            error "❌ $name - 不健康"
-            failed_services+=("$name")
-        fi
-    done
-    
-    if [ ${#failed_services[@]} -eq 0 ]; then
-        log "🎉 所有服务健康检查通过"
-        return 0
-    else
-        error "以下服务健康检查失败: ${failed_services[*]}"
-        return 1
-    fi
-}
-
-# ==================== 部署后配置 ====================
-
-post_deploy_setup() {
-    log "⚙️  执行部署后配置..."
-    
-    # 创建默认用户
-    create_default_user
-    
-    # 初始化向量数据库
-    initialize_vector_database
-    
-    # 设置监控告警
-    if [ "$ENABLE_MONITORING" = true ]; then
-        setup_monitoring_alerts
-    fi
-    
-    info "部署后配置完成"
-}
-
-create_default_user() {
-    info "创建默认管理员用户..."
-    
-    # 通过API创建默认用户
-    curl -s -X POST http://localhost:8000/api/v1/users/register \
-        -H "Content-Type: application/json" \
-        -d '{
-            "username": "admin",
-            "email": "admin@example.com",
-            "password": "admin123"
-        }' || warn "默认用户创建失败，可能已存在"
-}
-
-initialize_vector_database() {
-    info "初始化向量数据库..."
-    
-    # 创建默认集合
-    curl -s -X POST http://localhost:6333/collections/travel_documents \
-        -H "Content-Type: application/json" \
-        -d '{
-            "vectors": {
-                "size": 768,
-                "distance": "Cosine"
-            }
-        }' || warn "向量数据库初始化失败"
-}
-
-setup_monitoring_alerts() {
-    info "设置监控告警..."
-    # 这里可以添加Prometheus告警规则配置
-    # 或者Grafana告警配置
-}
-
-# ==================== 显示信息 ====================
-
-show_deployment_info() {
-    log "📋 部署信息"
-    
-    echo ""
-    echo "🌐 访问地址:"
-    echo "  主应用:          http://localhost"
-    echo "  API网关:         http://localhost:8000"
-    echo "  前端应用:        http://localhost:3000"
-    echo ""
-    echo "🔧 管理工具:"
-    echo "  数据库管理:      http://localhost:8080"
-    echo "  Redis管理:       http://localhost:8081"
-    echo "  对象存储:        http://localhost:9001"
-    echo ""
-    
-    if [ "$ENABLE_MONITORING" = true ]; then
-        echo "📊 监控服务:"
-        echo "  Prometheus:      http://localhost:9090"
-        echo "  Grafana:         http://localhost:3001 (admin/admin123)"
-        echo "  Jaeger:          http://localhost:16686"
-        echo "  Flower:          http://localhost:5555"
-        echo ""
-    fi
-    
-    if [ "$ENABLE_LOGGING" = true ]; then
-        echo "📝 日志服务:"
-        echo "  Kibana:          http://localhost:5601"
-        echo ""
-    fi
-    
-    echo "🔑 默认凭据:"
-    echo "  管理员用户:      admin / admin123"
-    echo "  数据库:          travel_user / travel_password_2024"
-    echo "  Redis:           redis_password_2024"
-    echo "  MinIO:           minioadmin / minioadmin123"
-    echo ""
-    
-    echo "📁 重要路径:"
-    echo "  日志目录:        $PROJECT_ROOT/logs"
-    echo "  数据目录:        $PROJECT_ROOT/data"
-    echo "  配置目录:        $PROJECT_ROOT/config"
-    echo ""
-    
-    echo "🛠️  常用命令:"
-    echo "  查看日志:        docker-compose logs -f [service]"
-    echo "  重启服务:        docker-compose restart [service]"
-    echo "  停止所有服务:    docker-compose down"
-    echo "  更新服务:        $0 -f"
-    echo ""
-}
-
-# ==================== 清理函数 ====================
-
-cleanup_on_exit() {
-    local exit_code=$?
-    
-    if [ $exit_code -ne 0 ]; then
-        error "部署过程中发生错误，退出码: $exit_code"
-        echo ""
-        echo "🔍 故障排除建议:"
-        echo "  1. 查看日志: tail -f $LOG_FILE"
-        echo "  2. 检查服务状态: docker-compose ps"
-        echo "  3. 查看服务日志: docker-compose logs [service]"
-        echo "  4. 重新部署: $0 -f"
-        echo ""
-    fi
-    
-    exit $exit_code
-}
-
-# ==================== 参数解析 ====================
-
-parse_arguments() {
+# 解析命令行参数
+parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
-            -e|--env)
+            -e|--environment)
                 ENVIRONMENT="$2"
                 shift 2
                 ;;
-            -s|--skip-build)
-                SKIP_BUILD=true
+            -s|--services)
+                SERVICES="$2"
+                shift 2
+                ;;
+            -m|--enable-monitoring)
+                ENABLE_MONITORING=true
+                shift
+                ;;
+            --disable-monitoring)
+                ENABLE_MONITORING=false
+                shift
+                ;;
+            -l|--enable-logging)
+                ENABLE_LOGGING=true
+                shift
+                ;;
+            --disable-logging)
+                ENABLE_LOGGING=false
+                shift
+                ;;
+            -f|--force-rebuild)
+                FORCE_REBUILD=true
                 shift
                 ;;
             -t|--skip-tests)
                 SKIP_TESTS=true
                 shift
                 ;;
-            -f|--force-recreate)
-                FORCE_RECREATE=true
-                shift
-                ;;
-            -c|--cleanup-volumes)
-                CLEANUP_VOLUMES=true
-                shift
-                ;;
-            --no-monitoring)
+            -q|--quick-start)
+                QUICK_START=true
+                SERVICES="core"
                 ENABLE_MONITORING=false
-                shift
-                ;;
-            --no-logging)
                 ENABLE_LOGGING=false
+                SKIP_TESTS=true
                 shift
                 ;;
             -h|--help)
@@ -884,73 +116,472 @@ parse_arguments() {
                 exit 0
                 ;;
             *)
-                error "未知参数: $1"
+                echo -e "${RED}未知选项: $1${NC}"
                 show_help
                 exit 1
                 ;;
         esac
     done
+}
+
+# 日志函数
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+log_step() {
+    echo -e "${PURPLE}[STEP]${NC} $1"
+}
+
+# 显示项目信息
+show_project_info() {
+    cat << EOF
+
+${CYAN}╔══════════════════════════════════════════════════════════════╗
+║                  AI Travel Planner 部署系统                   ║
+║                                                              ║
+║  版本: ${PROJECT_VERSION}                                         ║
+║  环境: ${ENVIRONMENT}                                        ║
+║  服务: ${SERVICES}                                           ║
+║  监控: $([ "$ENABLE_MONITORING" = true ] && echo "启用" || echo "禁用")                                            ║
+║  日志: $([ "$ENABLE_LOGGING" = true ] && echo "启用" || echo "禁用")                                            ║
+╚══════════════════════════════════════════════════════════════╝${NC}
+
+EOF
+}
+
+# 检查依赖
+check_dependencies() {
+    log_step "检查系统依赖"
     
-    # 验证环境参数
-    if [[ ! "$ENVIRONMENT" =~ ^(development|staging|production)$ ]]; then
-        error "无效的环境: $ENVIRONMENT"
+    local deps=("docker" "docker-compose" "git")
+    local missing_deps=()
+    
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            missing_deps+=("$dep")
+        fi
+    done
+    
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        log_error "缺少以下依赖: ${missing_deps[*]}"
+        log_info "请安装缺少的依赖后重试"
         exit 1
+    fi
+    
+    # 检查 Docker 服务状态
+    if ! docker info &> /dev/null; then
+        log_error "Docker 服务未启动"
+        log_info "请启动 Docker 服务: sudo systemctl start docker"
+        exit 1
+    fi
+    
+    # 检查 Docker Compose 版本
+    local compose_version
+    compose_version=$(docker-compose --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    log_info "Docker Compose 版本: $compose_version"
+    
+    log_success "依赖检查完成"
+}
+
+# 设置环境变量
+setup_environment() {
+    log_step "设置环境变量"
+    
+    local env_file="$PROJECT_ROOT/.env"
+    local env_template="$PROJECT_ROOT/.env.example"
+    
+    # 如果没有 .env 文件，从模板创建
+    if [ ! -f "$env_file" ]; then
+        if [ -f "$env_template" ]; then
+            cp "$env_template" "$env_file"
+            log_info "从模板创建 .env 文件"
+        else
+            log_warning ".env 文件不存在，使用默认配置"
+        fi
+    fi
+    
+    # 根据环境设置特定变量
+    export COMPOSE_PROJECT_NAME="${PROJECT_NAME}-${ENVIRONMENT}"
+    export ENVIRONMENT
+    export PROJECT_VERSION
+    
+    case $ENVIRONMENT in
+        development)
+            export DEBUG=true
+            export LOG_LEVEL=debug
+            export RELOAD=true
+            ;;
+        testing)
+            export DEBUG=true
+            export LOG_LEVEL=info
+            export RELOAD=false
+            ;;
+        production)
+            export DEBUG=false
+            export LOG_LEVEL=error
+            export RELOAD=false
+            ;;
+    esac
+    
+    log_success "环境变量设置完成"
+}
+
+# 创建必要目录
+create_directories() {
+    log_step "创建必要目录"
+    
+    local dirs=(
+        "$PROJECT_ROOT/logs"
+        "$PROJECT_ROOT/data/postgres"
+        "$PROJECT_ROOT/data/redis"
+        "$PROJECT_ROOT/data/qdrant"
+        "$PROJECT_ROOT/data/elasticsearch"
+        "$PROJECT_ROOT/data/prometheus"
+        "$PROJECT_ROOT/data/grafana"
+        "$PROJECT_ROOT/deployment/monitoring"
+        "$PROJECT_ROOT/deployment/logging"
+        "$PROJECT_ROOT/deployment/nginx/conf.d"
+        "$PROJECT_ROOT/deployment/nginx/ssl"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        mkdir -p "$dir"
+    done
+    
+    log_success "目录创建完成"
+}
+
+# 运行测试
+run_tests() {
+    if [ "$SKIP_TESTS" = true ]; then
+        log_warning "跳过测试"
+        return 0
+    fi
+    
+    log_step "运行测试"
+    
+    cd "$PROJECT_ROOT"
+    
+    # 运行单元测试
+    if [ -f "scripts/run_tests.py" ]; then
+        python scripts/run_tests.py
+    else
+        log_warning "测试脚本不存在，跳过测试"
+    fi
+    
+    log_success "测试完成"
+}
+
+# 构建 Docker 镜像
+build_images() {
+    log_step "构建 Docker 镜像"
+    
+    cd "$PROJECT_ROOT/deployment"
+    
+    local build_args=""
+    if [ "$FORCE_REBUILD" = true ]; then
+        build_args="--no-cache"
+        log_info "强制重新构建所有镜像"
+    fi
+    
+    # 根据服务类型构建不同的镜像
+    case $SERVICES in
+        all)
+            docker-compose build $build_args
+            ;;
+        core)
+            docker-compose build $build_args api-gateway chat-service rag-service agent-service planning-service integration-service user-service
+            ;;
+        frontend)
+            docker-compose build $build_args frontend
+            ;;
+        monitoring)
+            log_info "监控服务使用官方镜像，无需构建"
+            ;;
+        logging)
+            log_info "日志服务使用官方镜像，无需构建"
+            ;;
+    esac
+    
+    log_success "镜像构建完成"
+}
+
+# 启动服务
+start_services() {
+    log_step "启动服务"
+    
+    cd "$PROJECT_ROOT/deployment"
+    
+    # 构建服务列表
+    local service_list=()
+    
+    case $SERVICES in
+        all)
+            service_list+=(
+                "postgres" "redis" "qdrant"
+                "api-gateway" "chat-service" "rag-service" 
+                "agent-service" "planning-service" "integration-service" "user-service"
+                "frontend"
+            )
+            
+            if [ "$ENABLE_MONITORING" = true ]; then
+                service_list+=("prometheus" "grafana" "node-exporter" "cadvisor")
+            fi
+            
+            if [ "$ENABLE_LOGGING" = true ]; then
+                service_list+=("elasticsearch" "kibana" "logstash" "filebeat")
+            fi
+            ;;
+        core)
+            service_list+=(
+                "postgres" "redis" "qdrant"
+                "api-gateway" "chat-service" "rag-service"
+                "agent-service" "planning-service" "integration-service" "user-service"
+            )
+            ;;
+        frontend)
+            service_list+=("frontend")
+            ;;
+        monitoring)
+            service_list+=("prometheus" "grafana" "node-exporter" "cadvisor")
+            ;;
+        logging)
+            service_list+=("elasticsearch" "kibana" "logstash" "filebeat")
+            ;;
+    esac
+    
+    # 分阶段启动服务
+    log_info "启动基础服务..."
+    docker-compose up -d postgres redis qdrant
+    
+    # 等待基础服务就绪
+    wait_for_service "postgres" 5432 60
+    wait_for_service "redis" 6379 30
+    wait_for_service "qdrant" 6333 60
+    
+    if [[ " ${service_list[*]} " =~ "elasticsearch" ]]; then
+        log_info "启动日志服务..."
+        docker-compose up -d elasticsearch
+        wait_for_service "elasticsearch" 9200 120
+        docker-compose up -d kibana logstash filebeat
+    fi
+    
+    if [[ " ${service_list[*]} " =~ "prometheus" ]]; then
+        log_info "启动监控服务..."
+        docker-compose up -d prometheus grafana node-exporter cadvisor
+    fi
+    
+    log_info "启动应用服务..."
+    for service in api-gateway chat-service rag-service agent-service planning-service integration-service user-service; do
+        if [[ " ${service_list[*]} " =~ "$service" ]]; then
+            docker-compose up -d "$service"
+        fi
+    done
+    
+    if [[ " ${service_list[*]} " =~ "frontend" ]]; then
+        log_info "启动前端服务..."
+        docker-compose up -d frontend
+    fi
+    
+    log_success "服务启动完成"
+}
+
+# 等待服务就绪
+wait_for_service() {
+    local service_name=$1
+    local port=$2
+    local timeout=${3:-30}
+    local count=0
+    
+    log_info "等待 $service_name 服务就绪..."
+    
+    while [ $count -lt $timeout ]; do
+        if docker-compose exec -T "$service_name" sh -c "nc -z localhost $port" 2>/dev/null; then
+            log_success "$service_name 服务已就绪"
+            return 0
+        fi
+        
+        sleep 1
+        count=$((count + 1))
+        
+        if [ $((count % 10)) -eq 0 ]; then
+            log_info "等待 $service_name 服务... ($count/$timeout)"
+        fi
+    done
+    
+    log_warning "$service_name 服务启动超时，但继续部署"
+    return 1
+}
+
+# 健康检查
+health_check() {
+    log_step "执行健康检查"
+    
+    local services
+    services=$(docker-compose ps --services --filter "status=running")
+    
+    echo "服务状态检查:"
+    echo "============================================"
+    
+    for service in $services; do
+        local status
+        status=$(docker-compose ps "$service" --format "table {{.Status}}" | tail -n 1)
+        
+        if [[ $status == *"Up"* ]]; then
+            echo -e "${GREEN}✓${NC} $service: $status"
+        else
+            echo -e "${RED}✗${NC} $service: $status"
+        fi
+    done
+    
+    echo "============================================"
+    
+    # 检查关键端点
+    log_info "检查关键端点..."
+    local endpoints=(
+        "http://localhost:8000/health:API网关"
+        "http://localhost:3000:前端应用"
+    )
+    
+    if [ "$ENABLE_MONITORING" = true ]; then
+        endpoints+=("http://localhost:9090:Prometheus")
+        endpoints+=("http://localhost:3001:Grafana")
+    fi
+    
+    if [ "$ENABLE_LOGGING" = true ]; then
+        endpoints+=("http://localhost:9200:Elasticsearch")
+        endpoints+=("http://localhost:5601:Kibana")
+    fi
+    
+    for endpoint_info in "${endpoints[@]}"; do
+        IFS=':' read -r url name <<< "$endpoint_info"
+        
+        if curl -s --max-time 5 "$url" > /dev/null 2>&1; then
+            echo -e "${GREEN}✓${NC} $name: $url"
+        else
+            echo -e "${YELLOW}⚠${NC} $name: $url (可能仍在启动中)"
+        fi
+    done
+    
+    log_success "健康检查完成"
+}
+
+# 显示访问信息
+show_access_info() {
+    log_step "部署完成！"
+    
+    cat << EOF
+
+${GREEN}🎉 AI Travel Planner 部署成功！${NC}
+
+${CYAN}📋 服务访问地址:${NC}
+┌─────────────────────────────────────────────────────────────┐
+│ 🌐 前端应用:        http://localhost:3000                    │
+│ 🔌 API网关:         http://localhost:8000                    │
+│ 📚 API文档:         http://localhost:8000/docs               │
+│ 💬 WebSocket:       ws://localhost:8000/api/v1/chat/websocket │
+└─────────────────────────────────────────────────────────────┘
+
+EOF
+
+    if [ "$ENABLE_MONITORING" = true ]; then
+        cat << EOF
+${CYAN}📊 监控系统:${NC}
+┌─────────────────────────────────────────────────────────────┐
+│ 📈 Grafana:         http://localhost:3001 (admin/admin123)   │
+│ 🔍 Prometheus:      http://localhost:9090                    │
+│ 📊 cAdvisor:        http://localhost:8081                    │
+└─────────────────────────────────────────────────────────────┘
+
+EOF
+    fi
+
+    if [ "$ENABLE_LOGGING" = true ]; then
+        cat << EOF
+${CYAN}📋 日志系统:${NC}
+┌─────────────────────────────────────────────────────────────┐
+│ 📊 Kibana:          http://localhost:5601                    │
+│ 🔍 Elasticsearch:   http://localhost:9200                    │
+└─────────────────────────────────────────────────────────────┘
+
+EOF
+    fi
+
+    cat << EOF
+${CYAN}🛠 管理命令:${NC}
+┌─────────────────────────────────────────────────────────────┐
+│ 查看日志:   docker-compose logs -f [service_name]            │
+│ 停止服务:   docker-compose down                              │
+│ 重启服务:   docker-compose restart [service_name]           │
+│ 查看状态:   docker-compose ps                                │
+│ 进入容器:   docker-compose exec [service_name] sh           │
+└─────────────────────────────────────────────────────────────┘
+
+${YELLOW}⚠ 注意事项:${NC}
+• 首次启动可能需要较长时间下载模型和初始化数据库
+• 如遇到问题，请查看具体服务日志进行调试
+• 生产环境部署前请修改默认密码和密钥
+
+${GREEN}🚀 开始您的AI旅行规划之旅吧！${NC}
+
+EOF
+}
+
+# 清理函数
+cleanup() {
+    if [ $? -ne 0 ]; then
+        log_error "部署过程中发生错误"
+        log_info "正在清理..."
+        
+        cd "$PROJECT_ROOT/deployment" 2>/dev/null || true
+        docker-compose down 2>/dev/null || true
     fi
 }
 
-# ==================== 主函数 ====================
-
+# 主函数
 main() {
-    # 设置信号处理
-    trap cleanup_on_exit EXIT
+    # 设置错误处理
+    trap cleanup EXIT
     
-    # 初始化日志
-    echo "AI Travel Planner 部署开始 - $(date)" > "$LOG_FILE"
+    # 解析参数
+    parse_args "$@"
     
-    log "🚀 AI Travel Planner 部署脚本启动"
-    log "环境: $ENVIRONMENT"
+    # 显示项目信息
+    show_project_info
     
-    # 检查并创建必要目录
-    setup_directories
-    
-    # 检查系统环境
-    check_prerequisites
-    
-    # 配置环境
+    # 执行部署步骤
+    check_dependencies
     setup_environment
+    create_directories
     
-    # 生成配置文件
-    generate_config_files
+    if [ "$QUICK_START" != true ]; then
+        run_tests
+    fi
     
-    # 构建镜像
     build_images
+    start_services
     
-    # 运行测试
-    run_tests
+    # 等待服务稳定
+    sleep 10
     
-    # 部署服务
-    deploy_services
-    
-    # 健康检查
-    sleep 30  # 等待服务完全启动
     health_check
+    show_access_info
     
-    # 部署后配置
-    post_deploy_setup
-    
-    # 显示部署信息
-    show_deployment_info
-    
-    log "🎉 AI Travel Planner 部署完成！"
+    log_success "部署完成！"
 }
 
-# ==================== 脚本入口 ====================
-
-# 解析命令行参数
-parse_arguments "$@"
-
-# 切换到项目根目录
-cd "$PROJECT_ROOT"
-
 # 执行主函数
-main 
+main "$@" 

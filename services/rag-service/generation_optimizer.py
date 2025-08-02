@@ -1,665 +1,368 @@
 """
 RAG生成优化系统
-实现检索结果与生成内容的智能融合、上下文压缩和信息提取算法、多源信息一致性检查机制、RAG结果质量评估和自动优化
+实现内容融合、上下文压缩、一致性检查、质量评估、优化循环等功能
 """
 
 import asyncio
 import json
-import re
-from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple, Union, Set
-from dataclasses import dataclass, asdict
-from enum import Enum
 import math
-import statistics
-
+import re
+import time
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Union, Tuple
+from dataclasses import dataclass, asdict
+from collections import defaultdict, Counter
 import numpy as np
+from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from transformers import AutoTokenizer, AutoModel, pipeline
-import torch
-import spacy
-from sentence_transformers import SentenceTransformer
-import jieba
-from rouge_score import rouge_scorer
-try:
-    from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-except ImportError:
-    logger.warning("NLTK not available, BLEU score will not be computed")
-    sentence_bleu = None
 
+try:
+    import jieba
+    import jieba.analyse
+    JIEBA_AVAILABLE = True
+except ImportError:
+    JIEBA_AVAILABLE = False
+
+try:
+    from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+
+import structlog
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
-from .advanced_retrieval import RetrievalResult, QueryAnalysis
+from .advanced_retrieval import RetrievalResult
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 
-class FusionStrategy(Enum):
-    """融合策略"""
-    CONCATENATION = "concatenation"        # 简单拼接
-    WEIGHTED_FUSION = "weighted_fusion"    # 加权融合
-    HIERARCHICAL = "hierarchical"          # 层次化融合
-    ATTENTION_BASED = "attention_based"    # 注意力机制
-    SEMANTIC_MERGE = "semantic_merge"      # 语义合并
-
-
-class CompressionMethod(Enum):
-    """压缩方法"""
-    EXTRACTIVE = "extractive"              # 抽取式
-    ABSTRACTIVE = "abstractive"            # 生成式
-    HYBRID = "hybrid"                      # 混合式
-    KEYWORD_BASED = "keyword_based"        # 关键词式
-    SEMANTIC_CLUSTERING = "semantic_clustering"  # 语义聚类
-
-
-class QualityMetric(Enum):
-    """质量指标"""
-    RELEVANCE = "relevance"                # 相关性
-    COHERENCE = "coherence"                # 连贯性
-    CONSISTENCY = "consistency"            # 一致性
-    COMPLETENESS = "completeness"          # 完整性
-    FACTUALITY = "factuality"              # 事实性
-    READABILITY = "readability"            # 可读性
-
-
 @dataclass
-class FusedContext:
-    """融合后的上下文"""
-    content: str
-    sources: List[str]
-    confidence: float
-    compression_ratio: float
-    fusion_method: str
+class GenerationContext:
+    """生成上下文"""
+    query: str
+    retrieved_results: List[RetrievalResult]
+    fused_content: str
+    compressed_content: str
+    generation_prompt: str
     metadata: Dict[str, Any]
 
 
 @dataclass
-class QualityAssessment:
-    """质量评估结果"""
+class QualityMetrics:
+    """质量评估指标"""
+    relevance_score: float
+    accuracy_score: float
+    completeness_score: float
+    coherence_score: float
+    faithfulness_score: float
     overall_score: float
-    metrics: Dict[str, float]
-    issues: List[str]
-    suggestions: List[str]
-    confidence: float
+    feedback: List[str]
 
 
 @dataclass
-class GenerationResult:
-    """生成结果"""
-    content: str
-    fused_context: FusedContext
-    quality_assessment: QualityAssessment
-    generation_time: float
+class OptimizationResult:
+    """优化结果"""
+    original_content: str
+    optimized_content: str
+    optimization_steps: List[str]
+    quality_improvement: float
+    processing_time: float
     metadata: Dict[str, Any]
 
 
-class ContextFusion:
-    """上下文融合器"""
+class ContentFusion:
+    """内容融合器"""
     
     def __init__(self):
-        # 初始化NLP工具
-        try:
-            self.nlp_zh = spacy.load("zh_core_web_sm")
-        except OSError:
-            logger.warning("中文spaCy模型未安装")
-            self.nlp_zh = None
-        
-        try:
-            self.nlp_en = spacy.load("en_core_web_sm")
-        except OSError:
-            logger.warning("英文spaCy模型未安装")
-            self.nlp_en = None
-        
-        # 向量化工具
-        self.vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
-        
-        # 注意力权重
-        self.attention_weights = {}
+        self.fusion_strategies = {
+            "concatenation": self._concatenation_fusion,
+            "weighted": self._weighted_fusion,
+            "hierarchical": self._hierarchical_fusion,
+            "attention": self._attention_fusion,
+            "semantic": self._semantic_fusion
+        }
     
-    async def fuse_contexts(self, 
-                          retrieval_results: List[RetrievalResult],
-                          query_analysis: QueryAnalysis,
-                          strategy: FusionStrategy = FusionStrategy.SEMANTIC_MERGE,
-                          max_length: int = 2000) -> FusedContext:
-        """融合多个检索结果"""
-        if not retrieval_results:
-            return FusedContext(
-                content="",
-                sources=[],
-                confidence=0.0,
-                compression_ratio=0.0,
-                fusion_method=strategy.value,
-                metadata={}
-            )
-        
-        if strategy == FusionStrategy.CONCATENATION:
-            return await self._concatenation_fusion(retrieval_results, max_length)
-        elif strategy == FusionStrategy.WEIGHTED_FUSION:
-            return await self._weighted_fusion(retrieval_results, query_analysis, max_length)
-        elif strategy == FusionStrategy.HIERARCHICAL:
-            return await self._hierarchical_fusion(retrieval_results, query_analysis, max_length)
-        elif strategy == FusionStrategy.ATTENTION_BASED:
-            return await self._attention_fusion(retrieval_results, query_analysis, max_length)
-        elif strategy == FusionStrategy.SEMANTIC_MERGE:
-            return await self._semantic_fusion(retrieval_results, query_analysis, max_length)
-        else:
-            return await self._semantic_fusion(retrieval_results, query_analysis, max_length)
-    
-    async def _concatenation_fusion(self, 
-                                   results: List[RetrievalResult], 
-                                   max_length: int) -> FusedContext:
-        """简单拼接融合"""
-        contents = []
-        sources = []
-        total_score = 0.0
-        
-        current_length = 0
-        for result in results:
-            if current_length + len(result.content) > max_length:
-                # 截断内容
-                remaining_length = max_length - current_length
-                if remaining_length > 100:  # 至少保留100字符
-                    contents.append(result.content[:remaining_length] + "...")
-                    sources.append(result.source)
-                break
-            
-            contents.append(result.content)
-            sources.append(result.source)
-            total_score += result.score
-            current_length += len(result.content)
-        
-        fused_content = "\n\n".join(contents)
-        avg_confidence = total_score / len(results) if results else 0.0
-        compression_ratio = len(fused_content) / sum(len(r.content) for r in results) if results else 0.0
-        
-        return FusedContext(
-            content=fused_content,
-            sources=sources,
-            confidence=avg_confidence,
-            compression_ratio=compression_ratio,
-            fusion_method="concatenation",
-            metadata={"original_count": len(results)}
-        )
-    
-    async def _weighted_fusion(self, 
-                              results: List[RetrievalResult],
-                              query_analysis: QueryAnalysis, 
-                              max_length: int) -> FusedContext:
-        """加权融合"""
+    def fuse_content(self, results: List[RetrievalResult], 
+                    strategy: str = "semantic", 
+                    max_length: int = 2000) -> str:
+        """融合检索内容"""
         if not results:
-            return FusedContext("", [], 0.0, 0.0, "weighted", {})
+            return ""
         
-        # 计算权重
-        weights = []
-        for result in results:
-            weight = self._calculate_relevance_weight(result, query_analysis)
-            weights.append(weight)
+        if strategy not in self.fusion_strategies:
+            strategy = "semantic"
         
-        # 标准化权重
-        total_weight = sum(weights)
-        if total_weight > 0:
-            weights = [w / total_weight for w in weights]
-        else:
-            weights = [1.0 / len(results)] * len(results)
-        
-        # 按权重排序并选择内容
-        weighted_results = list(zip(results, weights))
-        weighted_results.sort(key=lambda x: x[1], reverse=True)
-        
-        contents = []
-        sources = []
-        total_confidence = 0.0
-        current_length = 0
-        
-        for result, weight in weighted_results:
-            if current_length >= max_length:
-                break
+        try:
+            fusion_func = self.fusion_strategies[strategy]
+            fused_content = fusion_func(results, max_length)
             
-            # 根据权重决定内容长度
-            content_length = min(len(result.content), max_length - current_length)
-            if weight < 0.1:  # 低权重内容截短
-                content_length = min(content_length, 200)
+            logger.info(f"使用{strategy}策略融合了{len(results)}个结果，生成{len(fused_content)}字符的内容")
+            return fused_content
             
-            content = result.content[:content_length]
-            if content_length < len(result.content):
-                content += "..."
-            
-            contents.append(f"[权重:{weight:.2f}] {content}")
-            sources.append(result.source)
-            total_confidence += result.score * weight
-            current_length += len(content)
-        
-        fused_content = "\n\n".join(contents)
-        compression_ratio = len(fused_content) / sum(len(r.content) for r in results)
-        
-        return FusedContext(
-            content=fused_content,
-            sources=sources,
-            confidence=total_confidence,
-            compression_ratio=compression_ratio,
-            fusion_method="weighted",
-            metadata={"weights": weights[:len(contents)]}
-        )
+        except Exception as e:
+            logger.error(f"内容融合失败: {e}")
+            # 降级到简单连接
+            return self._concatenation_fusion(results, max_length)
     
-    async def _hierarchical_fusion(self, 
-                                  results: List[RetrievalResult],
-                                  query_analysis: QueryAnalysis, 
-                                  max_length: int) -> FusedContext:
-        """层次化融合"""
-        if not results:
-            return FusedContext("", [], 0.0, 0.0, "hierarchical", {})
-        
-        # 按来源分组
-        source_groups = {}
-        for result in results:
-            source = result.source
-            if source not in source_groups:
-                source_groups[source] = []
-            source_groups[source].append(result)
-        
-        # 为每个来源组生成摘要
-        group_summaries = []
-        all_sources = []
-        
-        for source, group_results in source_groups.items():
-            # 合并同源内容
-            group_content = "\n".join([r.content for r in group_results])
-            
-            # 生成摘要（简化版，实际可以使用更复杂的摘要算法）
-            summary = await self._extract_key_sentences(group_content, max_sentences=3)
-            
-            avg_score = np.mean([r.score for r in group_results])
-            group_summaries.append({
-                "source": source,
-                "summary": summary,
-                "score": avg_score,
-                "count": len(group_results)
-            })
-            all_sources.extend([source] * len(group_results))
-        
-        # 按分数排序组
-        group_summaries.sort(key=lambda x: x["score"], reverse=True)
-        
-        # 构建层次化内容
+    def _concatenation_fusion(self, results: List[RetrievalResult], max_length: int) -> str:
+        """简单连接融合"""
         contents = []
         current_length = 0
         
-        for group in group_summaries:
-            if current_length >= max_length:
-                break
-            
-            header = f"## {group['source']} (相关度: {group['score']:.2f})"
-            content = f"{header}\n{group['summary']}\n"
-            
+        # 按分数排序
+        sorted_results = sorted(results, key=lambda x: x.score, reverse=True)
+        
+        for result in sorted_results:
+            content = result.content.strip()
             if current_length + len(content) <= max_length:
                 contents.append(content)
                 current_length += len(content)
             else:
-                # 截断最后一个组的内容
-                remaining = max_length - current_length - len(header) - 2
-                if remaining > 50:
-                    truncated_summary = group['summary'][:remaining] + "..."
-                    contents.append(f"{header}\n{truncated_summary}\n")
+                # 截断最后一个文档
+                remaining = max_length - current_length
+                if remaining > 100:  # 最少保留100字符
+                    contents.append(content[:remaining])
                 break
         
-        fused_content = "\n".join(contents)
-        avg_confidence = np.mean([g["score"] for g in group_summaries]) if group_summaries else 0.0
-        compression_ratio = len(fused_content) / sum(len(r.content) for r in results)
-        
-        return FusedContext(
-            content=fused_content,
-            sources=list(set(all_sources)),
-            confidence=avg_confidence,
-            compression_ratio=compression_ratio,
-            fusion_method="hierarchical",
-            metadata={"groups": len(source_groups)}
-        )
+        return "\n\n".join(contents)
     
-    async def _attention_fusion(self, 
-                               results: List[RetrievalResult],
-                               query_analysis: QueryAnalysis, 
-                               max_length: int) -> FusedContext:
-        """基于注意力机制的融合"""
-        if not results:
-            return FusedContext("", [], 0.0, 0.0, "attention", {})
+    def _weighted_fusion(self, results: List[RetrievalResult], max_length: int) -> str:
+        """加权融合"""
+        # 计算权重
+        total_score = sum(result.score for result in results)
+        weights = [result.score / total_score for result in results]
         
-        # 计算查询与每个结果的注意力权重
-        query_keywords = set(query_analysis.keywords)
-        attention_weights = []
-        
-        for result in results:
-            # 基于关键词重叠计算注意力
-            result_words = set(self._tokenize_text(result.content, query_analysis.language))
-            keyword_overlap = len(query_keywords.intersection(result_words))
-            
-            # 基于相似度计算注意力
-            similarity_score = result.score
-            
-            # 综合注意力权重
-            attention = (keyword_overlap * 0.3 + similarity_score * 0.7)
-            attention_weights.append(attention)
-        
-        # 标准化注意力权重
-        if sum(attention_weights) > 0:
-            attention_weights = [w / sum(attention_weights) for w in attention_weights]
-        else:
-            attention_weights = [1.0 / len(results)] * len(results)
-        
-        # 基于注意力权重重新排序和选择内容
-        attended_results = list(zip(results, attention_weights))
-        attended_results.sort(key=lambda x: x[1], reverse=True)
-        
+        # 根据权重分配长度
         contents = []
-        sources = []
-        current_length = 0
-        total_confidence = 0.0
+        for result, weight in zip(results, weights):
+            allocated_length = int(max_length * weight)
+            content = result.content.strip()
+            
+            if len(content) > allocated_length:
+                content = content[:allocated_length]
+            
+            contents.append(f"[权重: {weight:.2f}] {content}")
         
-        for result, attention in attended_results:
-            if current_length >= max_length:
-                break
-            
-            # 根据注意力权重调整内容长度
-            max_content_length = int(max_length * attention * 2)  # 注意力高的内容可以更长
-            max_content_length = min(max_content_length, max_length - current_length)
-            
-            if max_content_length < 50:  # 最小内容长度
-                break
-            
-            content = result.content[:max_content_length]
-            if len(content) < len(result.content):
-                content += "..."
-            
-            # 添加注意力权重标识
-            contents.append(f"[注意力:{attention:.3f}] {content}")
-            sources.append(result.source)
-            total_confidence += result.score * attention
-            current_length += len(content)
-        
-        fused_content = "\n\n".join(contents)
-        compression_ratio = len(fused_content) / sum(len(r.content) for r in results)
-        
-        return FusedContext(
-            content=fused_content,
-            sources=sources,
-            confidence=total_confidence,
-            compression_ratio=compression_ratio,
-            fusion_method="attention",
-            metadata={"attention_weights": attention_weights[:len(contents)]}
-        )
+        return "\n\n".join(contents)
     
-    async def _semantic_fusion(self, 
-                              results: List[RetrievalResult],
-                              query_analysis: QueryAnalysis, 
-                              max_length: int) -> FusedContext:
+    def _hierarchical_fusion(self, results: List[RetrievalResult], max_length: int) -> str:
+        """分层融合"""
+        # 按来源分组
+        source_groups = defaultdict(list)
+        for result in results:
+            source = result.metadata.get("source", "unknown")
+            source_groups[source].append(result)
+        
+        # 为每个来源生成摘要
+        fused_contents = []
+        for source, group_results in source_groups.items():
+            group_contents = [result.content for result in group_results]
+            summary = self._summarize_content_group(group_contents)
+            fused_contents.append(f"来源 [{source}]:\n{summary}")
+        
+        combined = "\n\n".join(fused_contents)
+        
+        # 如果超长，进行截断
+        if len(combined) > max_length:
+            combined = combined[:max_length]
+        
+        return combined
+    
+    def _attention_fusion(self, results: List[RetrievalResult], max_length: int) -> str:
+        """注意力机制融合"""
+        if not results:
+            return ""
+        
+        # 计算注意力权重
+        contents = [result.content for result in results]
+        scores = [result.score for result in results]
+        
+        # 基于TF-IDF计算内容重要性
+        vectorizer = TfidfVectorizer(max_features=100)
+        try:
+            tfidf_matrix = vectorizer.fit_transform(contents)
+            
+            # 计算注意力权重（结合检索分数和TF-IDF）
+            attention_weights = []
+            for i, (score, tfidf_vector) in enumerate(zip(scores, tfidf_matrix)):
+                # TF-IDF向量的L2范数表示内容重要性
+                content_importance = np.linalg.norm(tfidf_vector.toarray())
+                attention_weight = score * content_importance
+                attention_weights.append(attention_weight)
+            
+            # 归一化权重
+            total_weight = sum(attention_weights)
+            if total_weight > 0:
+                attention_weights = [w / total_weight for w in attention_weights]
+            else:
+                attention_weights = [1.0 / len(contents) for _ in contents]
+            
+            # 根据注意力权重组合内容
+            fused_parts = []
+            current_length = 0
+            
+            # 按注意力权重排序
+            weighted_results = list(zip(results, attention_weights))
+            weighted_results.sort(key=lambda x: x[1], reverse=True)
+            
+            for result, weight in weighted_results:
+                if current_length >= max_length:
+                    break
+                
+                content = result.content.strip()
+                allocated_length = min(
+                    len(content),
+                    int(max_length * weight),
+                    max_length - current_length
+                )
+                
+                if allocated_length > 50:  # 最少保留50字符
+                    selected_content = content[:allocated_length]
+                    fused_parts.append(f"[权重: {weight:.3f}] {selected_content}")
+                    current_length += allocated_length
+            
+            return "\n\n".join(fused_parts)
+            
+        except Exception as e:
+            logger.error(f"注意力融合失败: {e}")
+            return self._concatenation_fusion(results, max_length)
+    
+    def _semantic_fusion(self, results: List[RetrievalResult], max_length: int) -> str:
         """语义融合"""
         if not results:
-            return FusedContext("", [], 0.0, 0.0, "semantic", {})
+            return ""
         
-        # 1. 语义去重
-        unique_results = await self._semantic_deduplication(results)
-        
-        # 2. 语义聚类
-        clusters = await self._semantic_clustering(unique_results)
-        
-        # 3. 每个聚类生成代表性内容
-        cluster_contents = []
-        all_sources = []
-        total_confidence = 0.0
-        
-        for cluster in clusters:
-            cluster_summary = await self._generate_cluster_summary(cluster, query_analysis)
-            cluster_contents.append(cluster_summary["content"])
-            all_sources.extend([r.source for r in cluster])
-            total_confidence += cluster_summary["confidence"]
-        
-        # 4. 按重要性排序和长度控制
-        fused_content = await self._merge_cluster_contents(cluster_contents, max_length)
-        
-        avg_confidence = total_confidence / len(clusters) if clusters else 0.0
-        compression_ratio = len(fused_content) / sum(len(r.content) for r in results)
-        
-        return FusedContext(
-            content=fused_content,
-            sources=list(set(all_sources)),
-            confidence=avg_confidence,
-            compression_ratio=compression_ratio,
-            fusion_method="semantic",
-            metadata={"clusters": len(clusters), "original_results": len(results)}
-        )
+        try:
+            contents = [result.content for result in results]
+            
+            # 使用聚类进行语义分组
+            vectorizer = TfidfVectorizer(max_features=200)
+            tfidf_matrix = vectorizer.fit_transform(contents)
+            
+            # 确定聚类数量
+            n_clusters = min(3, len(contents))
+            if n_clusters < 2:
+                return self._concatenation_fusion(results, max_length)
+            
+            # 聚类
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+            cluster_labels = kmeans.fit_predict(tfidf_matrix)
+            
+            # 按聚类组织内容
+            clusters = defaultdict(list)
+            for i, label in enumerate(cluster_labels):
+                clusters[label].append((results[i], contents[i]))
+            
+            # 为每个聚类生成代表性内容
+            fused_parts = []
+            for cluster_id, cluster_items in clusters.items():
+                # 选择聚类中分数最高的内容作为代表
+                cluster_items.sort(key=lambda x: x[0].score, reverse=True)
+                representative = cluster_items[0][1]
+                
+                # 如果聚类有多个项目，生成摘要
+                if len(cluster_items) > 1:
+                    cluster_contents = [item[1] for item in cluster_items]
+                    summary = self._summarize_content_group(cluster_contents)
+                    fused_parts.append(f"主题 {cluster_id + 1}:\n{summary}")
+                else:
+                    fused_parts.append(f"主题 {cluster_id + 1}:\n{representative}")
+            
+            combined = "\n\n".join(fused_parts)
+            
+            # 长度控制
+            if len(combined) > max_length:
+                combined = combined[:max_length]
+            
+            return combined
+            
+        except Exception as e:
+            logger.error(f"语义融合失败: {e}")
+            return self._concatenation_fusion(results, max_length)
     
-    async def _semantic_deduplication(self, results: List[RetrievalResult]) -> List[RetrievalResult]:
-        """语义去重"""
-        if len(results) <= 1:
-            return results
-        
-        # 简单的相似度去重
-        unique_results = []
-        
-        for result in results:
-            is_duplicate = False
-            
-            for existing in unique_results:
-                # 计算内容相似度
-                similarity = self._calculate_text_similarity(result.content, existing.content)
-                if similarity > 0.8:  # 高相似度阈值
-                    is_duplicate = True
-                    # 保留分数更高的结果
-                    if result.score > existing.score:
-                        unique_results.remove(existing)
-                        unique_results.append(result)
-                    break
-            
-            if not is_duplicate:
-                unique_results.append(result)
-        
-        return unique_results
-    
-    async def _semantic_clustering(self, results: List[RetrievalResult]) -> List[List[RetrievalResult]]:
-        """语义聚类"""
-        if len(results) <= 2:
-            return [results]
-        
-        # 简化的聚类算法
-        clusters = []
-        remaining_results = results.copy()
-        
-        while remaining_results:
-            # 选择第一个结果作为聚类中心
-            center = remaining_results.pop(0)
-            cluster = [center]
-            
-            # 找到与中心相似的结果
-            to_remove = []
-            for i, result in enumerate(remaining_results):
-                similarity = self._calculate_text_similarity(center.content, result.content)
-                if similarity > 0.5:  # 聚类阈值
-                    cluster.append(result)
-                    to_remove.append(i)
-            
-            # 移除已聚类的结果
-            for i in reversed(to_remove):
-                remaining_results.pop(i)
-            
-            clusters.append(cluster)
-        
-        return clusters
-    
-    async def _generate_cluster_summary(self, 
-                                       cluster: List[RetrievalResult],
-                                       query_analysis: QueryAnalysis) -> Dict[str, Any]:
-        """生成聚类摘要"""
-        if len(cluster) == 1:
-            return {
-                "content": cluster[0].content,
-                "confidence": cluster[0].score
-            }
-        
-        # 合并聚类内容
-        combined_content = "\n".join([r.content for r in cluster])
-        
-        # 提取关键句子
-        key_sentences = await self._extract_key_sentences(combined_content, max_sentences=5)
-        
-        # 计算平均置信度
-        avg_confidence = np.mean([r.score for r in cluster])
-        
-        return {
-            "content": key_sentences,
-            "confidence": avg_confidence
-        }
-    
-    async def _merge_cluster_contents(self, contents: List[str], max_length: int) -> str:
-        """合并聚类内容"""
+    def _summarize_content_group(self, contents: List[str]) -> str:
+        """为内容组生成摘要"""
         if not contents:
             return ""
         
-        # 按重要性排序（这里简化为按长度）
-        contents.sort(key=len, reverse=True)
+        if len(contents) == 1:
+            return contents[0]
         
-        merged = []
-        current_length = 0
+        # 简单的摘要策略：选择最长的内容并提取关键句子
+        longest_content = max(contents, key=len)
         
-        for content in contents:
-            if current_length + len(content) <= max_length:
-                merged.append(content)
-                current_length += len(content)
-            else:
-                # 截断最后一个内容
-                remaining = max_length - current_length
-                if remaining > 100:
-                    merged.append(content[:remaining] + "...")
-                break
-        
-        return "\n\n".join(merged)
-    
-    async def _extract_key_sentences(self, text: str, max_sentences: int = 3) -> str:
-        """提取关键句子"""
-        sentences = re.split(r'[.!?。！？]', text)
+        # 提取关键句子（简化版）
+        sentences = re.split(r'[。！？]', longest_content)
         sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
         
-        if len(sentences) <= max_sentences:
-            return ". ".join(sentences)
-        
-        # 简单的关键句提取：选择最长的句子
-        sentences.sort(key=len, reverse=True)
-        key_sentences = sentences[:max_sentences]
-        
-        return ". ".join(key_sentences)
-    
-    def _calculate_relevance_weight(self, result: RetrievalResult, query_analysis: QueryAnalysis) -> float:
-        """计算相关性权重"""
-        # 基础权重来自检索分数
-        base_weight = result.score
-        
-        # 关键词匹配加权
-        result_words = set(self._tokenize_text(result.content, query_analysis.language))
-        query_keywords = set(query_analysis.keywords)
-        keyword_overlap = len(query_keywords.intersection(result_words))
-        keyword_weight = keyword_overlap / max(len(query_keywords), 1) * 0.3
-        
-        # 实体匹配加权
-        entity_weight = 0.0
-        for entity in query_analysis.entities:
-            if entity["text"].lower() in result.content.lower():
-                entity_weight += 0.1
-        
-        return base_weight + keyword_weight + min(entity_weight, 0.3)
-    
-    def _tokenize_text(self, text: str, language: str) -> List[str]:
-        """文本分词"""
-        if language == "zh":
-            return list(jieba.cut(text))
-        else:
-            return re.findall(r'\b\w+\b', text.lower())
-    
-    def _calculate_text_similarity(self, text1: str, text2: str) -> float:
-        """计算文本相似度"""
-        try:
-            # 使用TF-IDF向量计算相似度
-            texts = [text1, text2]
-            tfidf_matrix = self.vectorizer.fit_transform(texts)
-            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-            return similarity
-        except:
-            # 回退到简单的词重叠
-            words1 = set(text1.lower().split())
-            words2 = set(text2.lower().split())
-            intersection = words1.intersection(words2)
-            union = words1.union(words2)
-            return len(intersection) / len(union) if union else 0.0
+        # 选择前3个句子作为摘要
+        summary_sentences = sentences[:3]
+        return "。".join(summary_sentences) + "。" if summary_sentences else longest_content[:200]
 
 
 class ContextCompressor:
     """上下文压缩器"""
     
     def __init__(self):
-        self.compression_stats = {
-            "total_compressions": 0,
-            "average_ratio": 0.0,
-            "method_usage": {}
+        self.compression_methods = {
+            "extractive": self._extractive_compression,
+            "abstractive": self._abstractive_compression,
+            "hybrid": self._hybrid_compression,
+            "keyword": self._keyword_compression,
+            "clustering": self._clustering_compression
         }
     
-    async def compress_context(self, 
-                              context: str,
-                              target_length: int,
-                              method: CompressionMethod = CompressionMethod.HYBRID,
-                              preserve_keywords: List[str] = None) -> Tuple[str, float]:
+    def compress_context(self, content: str, target_length: int, 
+                        method: str = "hybrid") -> str:
         """压缩上下文"""
-        if len(context) <= target_length:
-            return context, 1.0
+        if len(content) <= target_length:
+            return content
         
-        preserve_keywords = preserve_keywords or []
+        if method not in self.compression_methods:
+            method = "hybrid"
         
-        if method == CompressionMethod.EXTRACTIVE:
-            compressed, ratio = await self._extractive_compression(context, target_length, preserve_keywords)
-        elif method == CompressionMethod.ABSTRACTIVE:
-            compressed, ratio = await self._abstractive_compression(context, target_length)
-        elif method == CompressionMethod.KEYWORD_BASED:
-            compressed, ratio = await self._keyword_compression(context, target_length, preserve_keywords)
-        elif method == CompressionMethod.SEMANTIC_CLUSTERING:
-            compressed, ratio = await self._semantic_compression(context, target_length)
-        else:  # HYBRID
-            compressed, ratio = await self._hybrid_compression(context, target_length, preserve_keywords)
-        
-        # 更新统计信息
-        self._update_compression_stats(method, ratio)
-        
-        return compressed, ratio
+        try:
+            compression_func = self.compression_methods[method]
+            compressed = compression_func(content, target_length)
+            
+            logger.info(f"使用{method}方法将{len(content)}字符压缩到{len(compressed)}字符")
+            return compressed
+            
+        except Exception as e:
+            logger.error(f"上下文压缩失败: {e}")
+            # 降级到简单截断
+            return content[:target_length]
     
-    async def _extractive_compression(self, 
-                                     context: str, 
-                                     target_length: int,
-                                     preserve_keywords: List[str]) -> Tuple[str, float]:
+    def _extractive_compression(self, content: str, target_length: int) -> str:
         """抽取式压缩"""
-        sentences = re.split(r'[.!?。！？]', context)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+        sentences = re.split(r'[。！？\n]', content)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
         
         if not sentences:
-            return context, 1.0
+            return content[:target_length]
         
-        # 计算句子重要性分数
+        # 计算句子重要性
         sentence_scores = []
         for sentence in sentences:
             score = 0.0
             
-            # 长度因子
-            score += len(sentence) / 1000
+            # 长度分数（中等长度的句子得分更高）
+            length_score = 1.0 - abs(len(sentence) - 50) / 100
+            score += length_score * 0.3
             
-            # 关键词因子
-            for keyword in preserve_keywords:
-                if keyword.lower() in sentence.lower():
-                    score += 1.0
+            # 关键词分数
+            if JIEBA_AVAILABLE:
+                keywords = jieba.analyse.extract_tags(sentence, topK=5)
+                score += len(keywords) * 0.4
             
-            # 位置因子（开头和结尾句子更重要）
-            position_factor = 1.0
-            if sentences.index(sentence) < len(sentences) * 0.2:
-                position_factor = 1.2
-            elif sentences.index(sentence) > len(sentences) * 0.8:
-                position_factor = 1.1
+            # 位置分数（开头和结尾的句子得分更高）
+            position = sentences.index(sentence)
+            if position < len(sentences) * 0.2 or position > len(sentences) * 0.8:
+                score += 0.3
             
-            score *= position_factor
             sentence_scores.append((sentence, score))
         
         # 按分数排序
@@ -673,788 +376,680 @@ class ContextCompressor:
             if current_length + len(sentence) <= target_length:
                 selected_sentences.append(sentence)
                 current_length += len(sentence)
-            elif current_length < target_length * 0.8:  # 至少达到目标长度的80%
-                # 截断句子
-                remaining = target_length - current_length
-                if remaining > 50:
-                    selected_sentences.append(sentence[:remaining] + "...")
+            else:
                 break
         
-        compressed = ". ".join(selected_sentences)
-        ratio = len(compressed) / len(context)
-        
-        return compressed, ratio
+        return "。".join(selected_sentences) + "。" if selected_sentences else content[:target_length]
     
-    async def _abstractive_compression(self, context: str, target_length: int) -> Tuple[str, float]:
+    def _abstractive_compression(self, content: str, target_length: int) -> str:
         """生成式压缩（简化版）"""
-        # 这里应该使用生成式模型进行摘要
-        # 作为简化实现，我们使用关键句提取
+        # 由于没有专门的摘要模型，使用关键信息提取
         
-        # 分段处理长文本
-        paragraphs = context.split('\n\n')
-        compressed_paragraphs = []
+        # 提取关键信息
+        key_info = []
         
-        for paragraph in paragraphs:
-            if len(paragraph) > 200:
-                # 提取段落关键句
-                sentences = re.split(r'[.!?。！？]', paragraph)
-                sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
-                
-                if len(sentences) > 1:
-                    # 选择最重要的1-2句
-                    key_sentences = sentences[:2] if len(sentences) > 3 else sentences[:1]
-                    compressed_paragraphs.append(". ".join(key_sentences))
-                else:
-                    compressed_paragraphs.append(paragraph)
-            else:
-                compressed_paragraphs.append(paragraph)
+        # 提取数字和日期
+        numbers = re.findall(r'\d+(?:\.\d+)?', content)
+        dates = re.findall(r'\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日', content)
         
-        compressed = "\n\n".join(compressed_paragraphs)
+        # 提取专有名词
+        proper_nouns = re.findall(r'[\u4e00-\u9fff]{2,6}(?:市|省|县|区|景点|酒店|餐厅)', content)
         
-        # 如果仍然太长，进一步压缩
-        if len(compressed) > target_length:
-            compressed = compressed[:target_length] + "..."
-        
-        ratio = len(compressed) / len(context)
-        return compressed, ratio
-    
-    async def _keyword_compression(self, 
-                                  context: str, 
-                                  target_length: int,
-                                  preserve_keywords: List[str]) -> Tuple[str, float]:
-        """基于关键词的压缩"""
-        sentences = re.split(r'[.!?。！？]', context)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
-        
-        # 优先保留包含关键词的句子
-        keyword_sentences = []
-        other_sentences = []
+        # 提取关键句子（包含重要信息的句子）
+        sentences = re.split(r'[。！？]', content)
+        key_sentences = []
         
         for sentence in sentences:
-            has_keyword = any(keyword.lower() in sentence.lower() for keyword in preserve_keywords)
-            if has_keyword:
-                keyword_sentences.append(sentence)
-            else:
-                other_sentences.append(sentence)
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            # 包含数字、日期或专有名词的句子
+            if (any(num in sentence for num in numbers) or
+                any(date in sentence for date in dates) or 
+                any(noun in sentence for noun in proper_nouns)):
+                key_sentences.append(sentence)
         
-        # 首先添加关键词句子
-        selected = []
-        current_length = 0
+        # 如果没有关键句子，选择最长的几个句子
+        if not key_sentences:
+            sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+            sentences.sort(key=len, reverse=True)
+            key_sentences = sentences[:3]
         
-        for sentence in keyword_sentences:
-            if current_length + len(sentence) <= target_length:
-                selected.append(sentence)
-                current_length += len(sentence)
+        # 组合关键信息
+        compressed = "。".join(key_sentences[:5]) + "。"
         
-        # 如果还有空间，添加其他句子
-        for sentence in other_sentences:
-            if current_length + len(sentence) <= target_length:
-                selected.append(sentence)
-                current_length += len(sentence)
-            else:
-                break
+        # 如果仍然太长，进行截断
+        if len(compressed) > target_length:
+            compressed = compressed[:target_length]
         
-        compressed = ". ".join(selected)
-        ratio = len(compressed) / len(context)
-        
-        return compressed, ratio
+        return compressed
     
-    async def _semantic_compression(self, context: str, target_length: int) -> Tuple[str, float]:
-        """基于语义聚类的压缩"""
-        sentences = re.split(r'[.!?。！？]', context)
+    def _hybrid_compression(self, content: str, target_length: int) -> str:
+        """混合压缩"""
+        # 先进行抽取式压缩到中间长度
+        intermediate_length = min(target_length * 2, len(content))
+        extractive_result = self._extractive_compression(content, intermediate_length)
+        
+        # 再进行生成式压缩到目标长度
+        if len(extractive_result) > target_length:
+            return self._abstractive_compression(extractive_result, target_length)
+        else:
+            return extractive_result
+    
+    def _keyword_compression(self, content: str, target_length: int) -> str:
+        """基于关键词的压缩"""
+        if JIEBA_AVAILABLE:
+            # 提取关键词
+            keywords = jieba.analyse.extract_tags(content, topK=20, withWeight=True)
+            
+            # 选择包含高权重关键词的句子
+            sentences = re.split(r'[。！？]', content)
+            sentence_scores = []
+            
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                
+                score = 0.0
+                for keyword, weight in keywords:
+                    if keyword in sentence:
+                        score += weight
+                
+                sentence_scores.append((sentence, score))
+            
+            # 按分数排序并选择
+            sentence_scores.sort(key=lambda x: x[1], reverse=True)
+            
+            selected = []
+            current_length = 0
+            
+            for sentence, score in sentence_scores:
+                if current_length + len(sentence) <= target_length:
+                    selected.append(sentence)
+                    current_length += len(sentence)
+                else:
+                    break
+            
+            return "。".join(selected) + "。" if selected else content[:target_length]
+        else:
+            # 降级到简单截断
+            return content[:target_length]
+    
+    def _clustering_compression(self, content: str, target_length: int) -> str:
+        """基于聚类的压缩"""
+        sentences = re.split(r'[。！？]', content)
         sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
         
-        if len(sentences) <= 3:
-            return context, 1.0
+        if len(sentences) < 3:
+            return content[:target_length]
         
-        # 简单的语义聚类（基于词汇重叠）
-        clusters = []
-        remaining = sentences.copy()
-        
-        while remaining:
-            center = remaining.pop(0)
-            cluster = [center]
+        try:
+            # 向量化句子
+            vectorizer = TfidfVectorizer(max_features=50)
+            sentence_vectors = vectorizer.fit_transform(sentences)
             
-            to_remove = []
-            for i, sentence in enumerate(remaining):
-                similarity = self._calculate_sentence_similarity(center, sentence)
-                if similarity > 0.3:
-                    cluster.append(sentence)
-                    to_remove.append(i)
+            # 聚类
+            n_clusters = min(3, len(sentences) // 2)
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+            cluster_labels = kmeans.fit_predict(sentence_vectors)
             
-            for i in reversed(to_remove):
-                remaining.pop(i)
+            # 每个聚类选择一个代表句子
+            clusters = defaultdict(list)
+            for i, label in enumerate(cluster_labels):
+                clusters[label].append(sentences[i])
             
-            clusters.append(cluster)
-        
-        # 从每个聚类中选择代表句子
-        representative_sentences = []
-        for cluster in clusters:
-            # 选择最长的句子作为代表
-            representative = max(cluster, key=len)
-            representative_sentences.append(representative)
-        
-        # 根据目标长度选择句子
-        selected = []
-        current_length = 0
-        
-        for sentence in representative_sentences:
-            if current_length + len(sentence) <= target_length:
-                selected.append(sentence)
-                current_length += len(sentence)
-            else:
-                break
-        
-        compressed = ". ".join(selected)
-        ratio = len(compressed) / len(context)
-        
-        return compressed, ratio
-    
-    async def _hybrid_compression(self, 
-                                 context: str, 
-                                 target_length: int,
-                                 preserve_keywords: List[str]) -> Tuple[str, float]:
-        """混合压缩方法"""
-        # 1. 首先使用关键词压缩
-        keyword_compressed, _ = await self._keyword_compression(context, target_length * 1.2, preserve_keywords)
-        
-        # 2. 如果仍然太长，使用抽取式压缩
-        if len(keyword_compressed) > target_length:
-            final_compressed, ratio = await self._extractive_compression(keyword_compressed, target_length, preserve_keywords)
-        else:
-            final_compressed = keyword_compressed
-            ratio = len(final_compressed) / len(context)
-        
-        return final_compressed, ratio
-    
-    def _calculate_sentence_similarity(self, sent1: str, sent2: str) -> float:
-        """计算句子相似度"""
-        words1 = set(sent1.lower().split())
-        words2 = set(sent2.lower().split())
-        
-        intersection = words1.intersection(words2)
-        union = words1.union(words2)
-        
-        return len(intersection) / len(union) if union else 0.0
-    
-    def _update_compression_stats(self, method: CompressionMethod, ratio: float):
-        """更新压缩统计"""
-        self.compression_stats["total_compressions"] += 1
-        
-        # 更新平均压缩比
-        total = self.compression_stats["total_compressions"]
-        current_avg = self.compression_stats["average_ratio"]
-        self.compression_stats["average_ratio"] = (current_avg * (total - 1) + ratio) / total
-        
-        # 更新方法使用统计
-        method_name = method.value
-        if method_name not in self.compression_stats["method_usage"]:
-            self.compression_stats["method_usage"][method_name] = 0
-        self.compression_stats["method_usage"][method_name] += 1
-    
-    def get_compression_stats(self) -> Dict[str, Any]:
-        """获取压缩统计"""
-        return self.compression_stats.copy()
+            representatives = []
+            for cluster_sentences in clusters.values():
+                # 选择最长的句子作为代表
+                representative = max(cluster_sentences, key=len)
+                representatives.append(representative)
+            
+            compressed = "。".join(representatives) + "。"
+            
+            # 长度控制
+            if len(compressed) > target_length:
+                compressed = compressed[:target_length]
+            
+            return compressed
+            
+        except Exception as e:
+            logger.error(f"聚类压缩失败: {e}")
+            return self._extractive_compression(content, target_length)
 
 
 class ConsistencyChecker:
     """一致性检查器"""
     
     def __init__(self):
-        self.inconsistency_patterns = [
-            # 数字不一致
-            r'(\d+)\s*[年岁]\s*.*?(\d+)\s*[年岁]',
-            # 日期不一致
-            r'(\d{4}年\d{1,2}月\d{1,2}日).*?(\d{4}年\d{1,2}月\d{1,2}日)',
-            # 价格不一致
-            r'(\d+)\s*[元].*?(\d+)\s*[元]',
-        ]
-    
-    async def check_consistency(self, 
-                               content: str,
-                               sources: List[str] = None) -> Dict[str, Any]:
-        """检查内容一致性"""
-        issues = []
-        confidence = 1.0
-        
-        # 1. 检查内部一致性
-        internal_issues = await self._check_internal_consistency(content)
-        issues.extend(internal_issues)
-        
-        # 2. 检查事实一致性
-        factual_issues = await self._check_factual_consistency(content)
-        issues.extend(factual_issues)
-        
-        # 3. 检查逻辑一致性
-        logical_issues = await self._check_logical_consistency(content)
-        issues.extend(logical_issues)
-        
-        # 计算一致性置信度
-        if issues:
-            confidence = max(0.0, 1.0 - len(issues) * 0.1)
-        
-        return {
-            "consistent": len(issues) == 0,
-            "confidence": confidence,
-            "issues": issues,
-            "issue_count": len(issues),
-            "issue_types": list(set([issue["type"] for issue in issues]))
+        self.conflict_patterns = {
+            "数字冲突": [
+                r'(\d+)元.*?(\d+)元',
+                r'(\d+)天.*?(\d+)天',
+                r'(\d+)小时.*?(\d+)小时'
+            ],
+            "时间冲突": [
+                r'(\d+)月(\d+)日.*?(\d+)月(\d+)日',
+                r'(上午|下午|早上|晚上).*?(上午|下午|早上|晚上)'
+            ],
+            "地点冲突": [
+                r'([\u4e00-\u9fff]+市).*?([\u4e00-\u9fff]+市)',
+                r'([\u4e00-\u9fff]+省).*?([\u4e00-\u9fff]+省)'
+            ]
         }
     
-    async def _check_internal_consistency(self, content: str) -> List[Dict[str, str]]:
-        """检查内部一致性"""
-        issues = []
+    def check_consistency(self, content: str) -> Dict[str, Any]:
+        """检查内容一致性"""
+        conflicts = []
         
-        # 检查数字一致性
-        numbers = re.findall(r'\d+(?:\.\d+)?', content)
-        if len(numbers) > 1:
-            # 简单检查：如果有相同的数字在不同上下文中，可能不一致
-            from collections import Counter
-            number_counts = Counter(numbers)
-            frequent_numbers = [num for num, count in number_counts.items() if count > 2]
+        for conflict_type, patterns in self.conflict_patterns.items():
+            for pattern in patterns:
+                matches = re.findall(pattern, content)
+                for match in matches:
+                    if len(set(match)) > 1:  # 如果有不同的值
+                        conflicts.append({
+                            "type": conflict_type,
+                            "values": list(match),
+                            "pattern": pattern
+                        })
+        
+        consistency_score = 1.0 - min(len(conflicts) * 0.1, 0.5)
+        
+        return {
+            "consistency_score": consistency_score,
+            "conflicts": conflicts,
+            "total_conflicts": len(conflicts)
+        }
+    
+    def resolve_conflicts(self, content: str, conflicts: List[Dict[str, Any]]) -> str:
+        """解决冲突"""
+        resolved_content = content
+        
+        for conflict in conflicts:
+            conflict_type = conflict["type"]
+            values = conflict["values"]
             
-            for num in frequent_numbers:
-                # 这里可以添加更复杂的上下文分析
-                if len(frequent_numbers) > 3:  # 简化的不一致检测
-                    issues.append({
-                        "type": "numerical_inconsistency",
-                        "description": f"数字 {num} 多次出现，可能存在不一致",
-                        "severity": "low"
-                    })
+            if conflict_type == "数字冲突":
+                # 选择最大值
+                max_value = max(values, key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0)
+                for value in values:
+                    if value != max_value:
+                        resolved_content = resolved_content.replace(value, max_value, 1)
+            
+            elif conflict_type == "时间冲突":
+                # 保留第一个时间
+                first_value = values[0]
+                for value in values[1:]:
+                    resolved_content = resolved_content.replace(value, first_value, 1)
+            
+            elif conflict_type == "地点冲突":
+                # 保留第一个地点
+                first_value = values[0]
+                for value in values[1:]:
+                    resolved_content = resolved_content.replace(value, first_value, 1)
         
-        # 检查日期一致性
-        dates = re.findall(r'\d{4}年\d{1,2}月\d{1,2}日', content)
-        if len(dates) > 1:
-            # 检查日期范围是否合理
-            try:
-                from datetime import datetime
-                parsed_dates = []
-                for date_str in dates:
-                    # 简单的日期解析
-                    year_match = re.search(r'(\d{4})年', date_str)
-                    if year_match:
-                        year = int(year_match.group(1))
-                        if year < 1900 or year > 2030:
-                            issues.append({
-                                "type": "date_inconsistency", 
-                                "description": f"日期 {date_str} 可能不合理",
-                                "severity": "medium"
-                            })
-            except:
-                pass
-        
-        return issues
-    
-    async def _check_factual_consistency(self, content: str) -> List[Dict[str, str]]:
-        """检查事实一致性"""
-        issues = []
-        
-        # 检查常见的事实性错误模式
-        fact_patterns = [
-            (r'价格.*?免费', "价格与免费矛盾"),
-            (r'必须.*?可选', "必须与可选矛盾"),
-            (r'24小时.*?营业时间', "24小时营业与特定营业时间矛盾"),
-        ]
-        
-        for pattern, description in fact_patterns:
-            if re.search(pattern, content, re.IGNORECASE):
-                issues.append({
-                    "type": "factual_inconsistency",
-                    "description": description,
-                    "severity": "high"
-                })
-        
-        return issues
-    
-    async def _check_logical_consistency(self, content: str) -> List[Dict[str, str]]:
-        """检查逻辑一致性"""
-        issues = []
-        
-        # 检查逻辑矛盾
-        contradiction_patterns = [
-            (r'不需要.*?必须', "不需要与必须的逻辑矛盾"),
-            (r'免费.*?收费', "免费与收费的逻辑矛盾"),
-            (r'简单.*?复杂', "简单与复杂的评价矛盾"),
-        ]
-        
-        for pattern, description in contradiction_patterns:
-            matches = re.findall(pattern, content, re.IGNORECASE)
-            if matches:
-                issues.append({
-                    "type": "logical_inconsistency",
-                    "description": description,
-                    "severity": "medium"
-                })
-        
-        return issues
+        return resolved_content
 
 
 class QualityEvaluator:
     """质量评估器"""
     
     def __init__(self):
-        # 初始化ROUGE评分器
-        try:
-            self.rouge_scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
-        except:
-            logger.warning("ROUGE评分器初始化失败")
-            self.rouge_scorer = None
-        
-        # 质量评估统计
-        self.evaluation_stats = {
-            "total_evaluations": 0,
-            "average_scores": {},
-            "score_distribution": {}
+        self.relevance_keywords = {
+            "travel": ["旅行", "旅游", "景点", "酒店", "交通", "路线"],
+            "food": ["美食", "餐厅", "小吃", "菜品", "口味"],
+            "accommodation": ["住宿", "酒店", "宾馆", "客房", "设施"]
         }
     
-    async def evaluate_quality(self, 
-                              content: str,
-                              reference: str = None,
-                              query_analysis: QueryAnalysis = None,
-                              retrieval_results: List[RetrievalResult] = None) -> QualityAssessment:
+    def evaluate_quality(self, query: str, generated_content: str, 
+                        source_content: str = "") -> QualityMetrics:
         """评估生成质量"""
-        metrics = {}
-        issues = []
-        suggestions = []
-        
-        # 1. 相关性评估
-        if query_analysis:
-            relevance_score = await self._evaluate_relevance(content, query_analysis)
-            metrics[QualityMetric.RELEVANCE.value] = relevance_score
-            
-            if relevance_score < 0.6:
-                issues.append("内容与查询相关性较低")
-                suggestions.append("增加更多与查询相关的信息")
-        
-        # 2. 连贯性评估
-        coherence_score = await self._evaluate_coherence(content)
-        metrics[QualityMetric.COHERENCE.value] = coherence_score
-        
-        if coherence_score < 0.7:
-            issues.append("内容连贯性需要改善")
-            suggestions.append("重新组织段落结构，添加过渡句")
-        
-        # 3. 一致性评估
-        consistency_checker = ConsistencyChecker()
-        consistency_result = await consistency_checker.check_consistency(content)
-        metrics[QualityMetric.CONSISTENCY.value] = consistency_result["confidence"]
-        
-        if not consistency_result["consistent"]:
-            issues.extend([issue["description"] for issue in consistency_result["issues"]])
-            suggestions.append("检查并修正内容中的不一致之处")
-        
-        # 4. 完整性评估
-        if query_analysis:
-            completeness_score = await self._evaluate_completeness(content, query_analysis)
-            metrics[QualityMetric.COMPLETENESS.value] = completeness_score
-            
-            if completeness_score < 0.8:
-                issues.append("内容可能不够完整")
-                suggestions.append("补充更多相关信息")
-        
-        # 5. 可读性评估
-        readability_score = await self._evaluate_readability(content)
-        metrics[QualityMetric.READABILITY.value] = readability_score
-        
-        if readability_score < 0.7:
-            issues.append("内容可读性需要提升")
-            suggestions.append("简化句子结构，使用更清晰的表达")
-        
-        # 6. 事实性评估
-        factuality_score = await self._evaluate_factuality(content, retrieval_results)
-        metrics[QualityMetric.FACTUALITY.value] = factuality_score
-        
-        if factuality_score < 0.8:
-            issues.append("内容事实性有待验证")
-            suggestions.append("验证关键事实信息的准确性")
-        
-        # 计算综合分数
-        overall_score = np.mean(list(metrics.values()))
-        confidence = min(overall_score, 1.0 - len(issues) * 0.05)
-        
-        # 更新统计信息
-        self._update_evaluation_stats(metrics, overall_score)
-        
-        return QualityAssessment(
-            overall_score=overall_score,
-            metrics=metrics,
-            issues=issues,
-            suggestions=suggestions,
-            confidence=confidence
+        metrics = QualityMetrics(
+            relevance_score=self._evaluate_relevance(query, generated_content),
+            accuracy_score=self._evaluate_accuracy(generated_content, source_content),
+            completeness_score=self._evaluate_completeness(query, generated_content),
+            coherence_score=self._evaluate_coherence(generated_content),
+            faithfulness_score=self._evaluate_faithfulness(generated_content, source_content),
+            overall_score=0.0,
+            feedback=[]
         )
+        
+        # 计算总分
+        metrics.overall_score = (
+            metrics.relevance_score * 0.25 +
+            metrics.accuracy_score * 0.2 +
+            metrics.completeness_score * 0.2 +
+            metrics.coherence_score * 0.15 +
+            metrics.faithfulness_score * 0.2
+        )
+        
+        # 生成反馈
+        metrics.feedback = self._generate_feedback(metrics)
+        
+        return metrics
     
-    async def _evaluate_relevance(self, content: str, query_analysis: QueryAnalysis) -> float:
+    def _evaluate_relevance(self, query: str, content: str) -> float:
         """评估相关性"""
-        content_lower = content.lower()
+        if not query or not content:
+            return 0.0
         
-        # 关键词匹配
-        keyword_matches = sum(1 for kw in query_analysis.keywords if kw.lower() in content_lower)
-        keyword_score = keyword_matches / max(len(query_analysis.keywords), 1)
+        # 提取查询关键词
+        if JIEBA_AVAILABLE:
+            query_keywords = set(jieba.analyse.extract_tags(query, topK=10))
+            content_keywords = set(jieba.analyse.extract_tags(content, topK=20))
+        else:
+            query_keywords = set(re.findall(r'[\u4e00-\u9fff]+', query))
+            content_keywords = set(re.findall(r'[\u4e00-\u9fff]+', content))
         
-        # 实体匹配
-        entity_matches = sum(1 for entity in query_analysis.entities 
-                           if entity["text"].lower() in content_lower)
-        entity_score = entity_matches / max(len(query_analysis.entities), 1) if query_analysis.entities else 0
+        if not query_keywords:
+            return 0.5
         
-        # 意图匹配（简化）
-        intent_keywords = {
-            "planning": ["计划", "安排", "规划"],
-            "booking": ["预订", "预定", "订票"],
-            "information": ["信息", "介绍", "了解"],
-            "recommendation": ["推荐", "建议"],
-            "comparison": ["比较", "对比"],
-            "navigation": ["路线", "交通", "怎么去"]
-        }
+        # 计算关键词重叠度
+        overlap = len(query_keywords.intersection(content_keywords))
+        relevance = overlap / len(query_keywords)
         
-        intent_score = 0.0
-        if query_analysis.intent in intent_keywords:
-            intent_words = intent_keywords[query_analysis.intent]
-            intent_matches = sum(1 for word in intent_words if word in content_lower)
-            intent_score = min(intent_matches / len(intent_words), 1.0)
-        
-        # 综合相关性分数
-        relevance = (keyword_score * 0.4 + entity_score * 0.3 + intent_score * 0.3)
         return min(relevance, 1.0)
     
-    async def _evaluate_coherence(self, content: str) -> float:
+    def _evaluate_accuracy(self, content: str, source_content: str) -> float:
+        """评估准确性"""
+        if not source_content:
+            return 0.7  # 没有源内容时给默认分数
+        
+        # 检查是否包含虚假信息（简化版）
+        false_indicators = ["可能", "也许", "大概", "据说", "传说"]
+        false_count = sum(1 for indicator in false_indicators if indicator in content)
+        
+        # 检查具体信息的准确性
+        accuracy_score = 1.0 - (false_count * 0.1)
+        
+        return max(accuracy_score, 0.0)
+    
+    def _evaluate_completeness(self, query: str, content: str) -> float:
+        """评估完整性"""
+        # 检查是否回答了查询的主要方面
+        completeness_factors = []
+        
+        # 检查基本信息
+        has_specific_info = bool(re.search(r'\d+', content))  # 包含数字
+        has_location_info = bool(re.search(r'[\u4e00-\u9fff]+(?:市|省|区|街|路)', content))
+        has_time_info = bool(re.search(r'\d+(?:年|月|日|小时|分钟|天)', content))
+        
+        completeness_factors.extend([has_specific_info, has_location_info, has_time_info])
+        
+        # 检查内容长度（太短可能不完整）
+        length_score = min(len(content) / 200, 1.0)
+        completeness_factors.append(length_score > 0.5)
+        
+        return sum(completeness_factors) / len(completeness_factors)
+    
+    def _evaluate_coherence(self, content: str) -> float:
         """评估连贯性"""
-        sentences = re.split(r'[.!?。！？]', content)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+        if not content:
+            return 0.0
+        
+        sentences = re.split(r'[。！？]', content)
+        sentences = [s.strip() for s in sentences if s.strip()]
         
         if len(sentences) < 2:
             return 1.0
         
-        # 检查连接词的使用
-        connectors = ['因为', '所以', '但是', '然而', '此外', '另外', '因此', '首先', '其次', '最后',
-                     'because', 'therefore', 'however', 'moreover', 'furthermore', 'first', 'second', 'finally']
+        # 检查句子间的连接词
+        coherence_indicators = ["首先", "然后", "接着", "最后", "另外", "此外", "因此", "所以"]
+        coherence_count = sum(1 for indicator in coherence_indicators 
+                            if any(indicator in sentence for sentence in sentences))
         
-        connector_count = sum(1 for sentence in sentences 
-                            for connector in connectors 
-                            if connector in sentence.lower())
-        connector_score = min(connector_count / len(sentences), 0.5)
+        # 检查重复和矛盾
+        word_overlap_scores = []
+        for i in range(len(sentences) - 1):
+            words1 = set(re.findall(r'[\u4e00-\u9fff]+', sentences[i]))
+            words2 = set(re.findall(r'[\u4e00-\u9fff]+', sentences[i + 1]))
+            
+            if words1 and words2:
+                overlap = len(words1.intersection(words2)) / len(words1.union(words2))
+                word_overlap_scores.append(overlap)
         
-        # 检查句子长度分布
-        sentence_lengths = [len(s.split()) for s in sentences]
-        length_variance = np.var(sentence_lengths) if sentence_lengths else 0
-        length_score = max(0, 1.0 - length_variance / 100)  # 长度变化不宜过大
+        avg_overlap = sum(word_overlap_scores) / len(word_overlap_scores) if word_overlap_scores else 0
         
-        # 检查重复词汇
-        all_words = []
-        for sentence in sentences:
-            all_words.extend(sentence.lower().split())
+        # 综合评分
+        coherence_score = (
+            min(coherence_count / len(sentences), 0.5) * 0.4 +
+            avg_overlap * 0.6
+        )
         
-        if all_words:
-            unique_ratio = len(set(all_words)) / len(all_words)
-            diversity_score = min(unique_ratio * 2, 1.0)  # 词汇多样性
+        return min(coherence_score, 1.0)
+    
+    def _evaluate_faithfulness(self, content: str, source_content: str) -> float:
+        """评估忠实性"""
+        if not source_content:
+            return 0.7
+        
+        # 检查生成内容是否忠实于源内容
+        if JIEBA_AVAILABLE:
+            content_keywords = set(jieba.analyse.extract_tags(content, topK=15))
+            source_keywords = set(jieba.analyse.extract_tags(source_content, topK=20))
         else:
-            diversity_score = 0.0
+            content_keywords = set(re.findall(r'[\u4e00-\u9fff]+', content))
+            source_keywords = set(re.findall(r'[\u4e00-\u9fff]+', source_content))
         
-        coherence = (connector_score * 0.3 + length_score * 0.3 + diversity_score * 0.4)
-        return coherence
-    
-    async def _evaluate_completeness(self, content: str, query_analysis: QueryAnalysis) -> float:
-        """评估完整性"""
-        # 基于查询复杂度评估完整性
-        expected_length = query_analysis.complexity_score * 1000  # 复杂查询期望更长的回答
-        actual_length = len(content)
-        
-        length_score = min(actual_length / expected_length, 1.0) if expected_length > 0 else 1.0
-        
-        # 检查是否回答了查询的主要方面
-        aspect_coverage = 0.0
-        if query_analysis.query_type.value == "factual":
-            # 事实性查询应该包含定义、特征等
-            aspect_keywords = ["是", "定义", "特点", "特征"]
-            aspect_coverage = sum(1 for kw in aspect_keywords if kw in content) / len(aspect_keywords)
-        elif query_analysis.query_type.value == "procedural":
-            # 程序性查询应该包含步骤、方法等
-            aspect_keywords = ["步骤", "方法", "首先", "然后", "最后"]
-            aspect_coverage = sum(1 for kw in aspect_keywords if kw in content) / len(aspect_keywords)
-        elif query_analysis.query_type.value == "comparison":
-            # 比较性查询应该包含对比信息
-            aspect_keywords = ["相比", "区别", "优势", "缺点", "不同"]
-            aspect_coverage = sum(1 for kw in aspect_keywords if kw in content) / len(aspect_keywords)
-        
-        completeness = (length_score * 0.6 + aspect_coverage * 0.4)
-        return min(completeness, 1.0)
-    
-    async def _evaluate_readability(self, content: str) -> float:
-        """评估可读性"""
-        sentences = re.split(r'[.!?。！？]', content)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
-        
-        if not sentences:
+        if not content_keywords:
             return 0.0
         
-        # 平均句子长度
-        avg_sentence_length = np.mean([len(s.split()) for s in sentences])
-        length_score = 1.0 if 10 <= avg_sentence_length <= 25 else max(0, 1.0 - abs(avg_sentence_length - 17.5) / 17.5)
+        # 计算关键词覆盖度
+        coverage = len(content_keywords.intersection(source_keywords)) / len(content_keywords)
         
-        # 段落结构
-        paragraphs = content.split('\n\n')
-        paragraph_score = min(len(paragraphs) / 5, 1.0)  # 适当的段落数
+        # 检查是否有明显的编造内容
+        hallucination_indicators = ["据最新消息", "根据专家预测", "最新研究表明"]
+        hallucination_count = sum(1 for indicator in hallucination_indicators if indicator in content)
         
-        # 标点符号使用
-        punctuation_density = len(re.findall(r'[,，.。!！?？;；:：]', content)) / len(content)
-        punctuation_score = 1.0 if 0.05 <= punctuation_density <= 0.15 else max(0, 1.0 - abs(punctuation_density - 0.1) / 0.1)
+        faithfulness_score = coverage - (hallucination_count * 0.2)
         
-        readability = (length_score * 0.4 + paragraph_score * 0.3 + punctuation_score * 0.3)
-        return readability
+        return max(faithfulness_score, 0.0)
     
-    async def _evaluate_factuality(self, content: str, retrieval_results: List[RetrievalResult] = None) -> float:
-        """评估事实性"""
-        if not retrieval_results:
-            return 0.8  # 默认分数
+    def _generate_feedback(self, metrics: QualityMetrics) -> List[str]:
+        """生成改进建议"""
+        feedback = []
         
-        # 检查内容是否与检索结果一致
-        content_lower = content.lower()
-        source_contents = [result.content.lower() for result in retrieval_results]
+        if metrics.relevance_score < 0.6:
+            feedback.append("内容与查询的相关性较低，建议增加更多相关信息")
         
-        # 简单的事实验证：检查关键信息是否在源文档中
-        content_sentences = re.split(r'[.!?。！？]', content_lower)
-        verified_sentences = 0
+        if metrics.accuracy_score < 0.7:
+            feedback.append("内容准确性需要改进，避免使用不确定的表述")
         
-        for sentence in content_sentences:
-            if len(sentence.strip()) < 10:
-                continue
-            
-            # 检查句子中的关键词是否在源文档中出现
-            sentence_words = set(sentence.split())
-            for source_content in source_contents:
-                source_words = set(source_content.split())
-                word_overlap = len(sentence_words.intersection(source_words))
-                if word_overlap >= len(sentence_words) * 0.3:  # 30%词汇重叠
-                    verified_sentences += 1
-                    break
+        if metrics.completeness_score < 0.6:
+            feedback.append("信息不够完整，建议补充时间、地点、价格等具体信息")
         
-        if content_sentences:
-            factuality = verified_sentences / len([s for s in content_sentences if len(s.strip()) >= 10])
-        else:
-            factuality = 0.0
+        if metrics.coherence_score < 0.6:
+            feedback.append("内容连贯性需要改善，建议增加过渡词和逻辑连接")
         
-        return min(factuality, 1.0)
-    
-    def _update_evaluation_stats(self, metrics: Dict[str, float], overall_score: float):
-        """更新评估统计"""
-        self.evaluation_stats["total_evaluations"] += 1
+        if metrics.faithfulness_score < 0.7:
+            feedback.append("内容忠实性有待提高，请确保基于可靠来源")
         
-        # 更新平均分数
-        for metric, score in metrics.items():
-            if metric not in self.evaluation_stats["average_scores"]:
-                self.evaluation_stats["average_scores"][metric] = 0.0
-            
-            total = self.evaluation_stats["total_evaluations"]
-            current_avg = self.evaluation_stats["average_scores"][metric]
-            self.evaluation_stats["average_scores"][metric] = (current_avg * (total - 1) + score) / total
+        if metrics.overall_score > 0.8:
+            feedback.append("整体质量良好，继续保持")
         
-        # 更新分数分布
-        score_range = "high" if overall_score >= 0.8 else "medium" if overall_score >= 0.6 else "low"
-        if score_range not in self.evaluation_stats["score_distribution"]:
-            self.evaluation_stats["score_distribution"][score_range] = 0
-        self.evaluation_stats["score_distribution"][score_range] += 1
-    
-    def get_evaluation_stats(self) -> Dict[str, Any]:
-        """获取评估统计"""
-        return self.evaluation_stats.copy()
+        return feedback
 
 
-class GenerationOptimizer:
-    """生成优化器"""
+class RAGOptimizer:
+    """RAG优化器"""
     
     def __init__(self):
-        self.context_fusion = ContextFusion()
+        self.content_fusion = ContentFusion()
         self.context_compressor = ContextCompressor()
         self.consistency_checker = ConsistencyChecker()
         self.quality_evaluator = QualityEvaluator()
         
-        # 优化策略配置
+        # 优化配置
         self.optimization_config = {
-            "max_context_length": 2000,
-            "fusion_strategy": FusionStrategy.SEMANTIC_MERGE,
-            "compression_method": CompressionMethod.HYBRID,
-            "quality_threshold": 0.7,
-            "max_iterations": 3
+            "max_iterations": 3,
+            "quality_threshold": 0.8,
+            "compression_ratio": 0.7,
+            "fusion_strategy": "semantic"
         }
     
-    async def optimize_generation(self,
-                                 retrieval_results: List[RetrievalResult],
-                                 query_analysis: QueryAnalysis,
-                                 target_quality: float = 0.8) -> GenerationResult:
-        """优化生成过程"""
-        start_time = datetime.now()
+    def optimize_generation(self, query: str, retrieval_results: List[RetrievalResult],
+                          generated_content: str = "") -> OptimizationResult:
+        """优化RAG生成"""
+        start_time = time.time()
+        original_content = generated_content
+        optimization_steps = []
         
-        # 1. 上下文融合
-        fused_context = await self.context_fusion.fuse_contexts(
-            retrieval_results=retrieval_results,
-            query_analysis=query_analysis,
-            strategy=self.optimization_config["fusion_strategy"],
-            max_length=self.optimization_config["max_context_length"]
-        )
-        
-        # 2. 上下文压缩（如果需要）
-        if len(fused_context.content) > self.optimization_config["max_context_length"]:
-            compressed_content, compression_ratio = await self.context_compressor.compress_context(
-                context=fused_context.content,
-                target_length=self.optimization_config["max_context_length"],
-                method=self.optimization_config["compression_method"],
-                preserve_keywords=query_analysis.keywords
+        try:
+            # 1. 内容融合
+            if retrieval_results:
+                fused_content = self.content_fusion.fuse_content(
+                    retrieval_results,
+                    strategy=self.optimization_config["fusion_strategy"]
+                )
+                optimization_steps.append("内容融合")
+            else:
+                fused_content = generated_content
+            
+            # 2. 上下文压缩
+            if len(fused_content) > 2000:
+                target_length = int(len(fused_content) * self.optimization_config["compression_ratio"])
+                compressed_content = self.context_compressor.compress_context(
+                    fused_content, target_length
+                )
+                optimization_steps.append("上下文压缩")
+            else:
+                compressed_content = fused_content
+            
+            # 3. 一致性检查和修复
+            consistency_result = self.consistency_checker.check_consistency(compressed_content)
+            if consistency_result["conflicts"]:
+                compressed_content = self.consistency_checker.resolve_conflicts(
+                    compressed_content, consistency_result["conflicts"]
+                )
+                optimization_steps.append("一致性修复")
+            
+            # 4. 质量评估
+            source_content = "\n".join([result.content for result in retrieval_results])
+            quality_metrics = self.quality_evaluator.evaluate_quality(
+                query, compressed_content, source_content
             )
             
-            fused_context.content = compressed_content
-            fused_context.compression_ratio = compression_ratio
-        
-        # 3. 生成内容（这里模拟生成过程）
-        generated_content = await self._generate_content(fused_context, query_analysis)
-        
-        # 4. 质量评估
-        quality_assessment = await self.quality_evaluator.evaluate_quality(
-            content=generated_content,
-            query_analysis=query_analysis,
-            retrieval_results=retrieval_results
-        )
-        
-        # 5. 迭代优化
-        iteration_count = 0
-        while (quality_assessment.overall_score < target_quality and 
-               iteration_count < self.optimization_config["max_iterations"]):
+            # 5. 迭代优化（如果质量不达标）
+            current_content = compressed_content
+            iteration = 0
             
-            logger.info(f"质量分数 {quality_assessment.overall_score:.3f} 低于目标 {target_quality}，进行优化迭代 {iteration_count + 1}")
+            while (quality_metrics.overall_score < self.optimization_config["quality_threshold"] and
+                   iteration < self.optimization_config["max_iterations"]):
+                
+                iteration += 1
+                optimization_steps.append(f"迭代优化 #{iteration}")
+                
+                # 基于质量反馈进行优化
+                current_content = self._iterative_improve(
+                    current_content, quality_metrics.feedback
+                )
+                
+                # 重新评估
+                quality_metrics = self.quality_evaluator.evaluate_quality(
+                    query, current_content, source_content
+                )
             
-            # 根据质量评估结果调整生成策略
-            optimized_context = await self._optimize_context_based_on_feedback(
-                fused_context, quality_assessment, query_analysis
+            processing_time = time.time() - start_time
+            
+            # 计算质量改进
+            if original_content:
+                original_quality = self.quality_evaluator.evaluate_quality(
+                    query, original_content, source_content
+                )
+                quality_improvement = quality_metrics.overall_score - original_quality.overall_score
+            else:
+                quality_improvement = quality_metrics.overall_score
+            
+            return OptimizationResult(
+                original_content=original_content,
+                optimized_content=current_content,
+                optimization_steps=optimization_steps,
+                quality_improvement=quality_improvement,
+                processing_time=processing_time,
+                metadata={
+                    "final_quality_score": quality_metrics.overall_score,
+                    "iterations_used": iteration,
+                    "compression_ratio": len(current_content) / max(len(fused_content), 1),
+                    "consistency_score": consistency_result["consistency_score"],
+                    "quality_metrics": asdict(quality_metrics)
+                }
             )
             
-            # 重新生成
-            generated_content = await self._generate_content(optimized_context, query_analysis)
+        except Exception as e:
+            logger.error(f"RAG优化失败: {e}")
+            processing_time = time.time() - start_time
             
-            # 重新评估
-            quality_assessment = await self.quality_evaluator.evaluate_quality(
-                content=generated_content,
-                query_analysis=query_analysis,
-                retrieval_results=retrieval_results
+            return OptimizationResult(
+                original_content=original_content,
+                optimized_content=original_content or "",
+                optimization_steps=["优化失败"],
+                quality_improvement=0.0,
+                processing_time=processing_time,
+                metadata={"error": str(e)}
             )
-            
-            iteration_count += 1
+    
+    def _iterative_improve(self, content: str, feedback: List[str]) -> str:
+        """基于反馈迭代改进内容"""
+        improved_content = content
         
-        # 6. 最终一致性检查
-        consistency_result = await self.consistency_checker.check_consistency(
-            content=generated_content,
-            sources=fused_context.sources
+        for suggestion in feedback:
+            if "相关性较低" in suggestion:
+                # 尝试保留更多关键信息
+                improved_content = self._enhance_relevance(improved_content)
+            
+            elif "信息不够完整" in suggestion:
+                # 尝试添加更多细节
+                improved_content = self._enhance_completeness(improved_content)
+            
+            elif "连贯性需要改善" in suggestion:
+                # 添加连接词
+                improved_content = self._enhance_coherence(improved_content)
+        
+        return improved_content
+    
+    def _enhance_relevance(self, content: str) -> str:
+        """增强相关性"""
+        # 确保关键信息在前面
+        sentences = re.split(r'[。！？]', content)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        # 将包含数字、地点等重要信息的句子前置
+        important_sentences = []
+        other_sentences = []
+        
+        for sentence in sentences:
+            if (re.search(r'\d+', sentence) or 
+                re.search(r'[\u4e00-\u9fff]+(?:市|省|区|景点)', sentence)):
+                important_sentences.append(sentence)
+            else:
+                other_sentences.append(sentence)
+        
+        reordered = important_sentences + other_sentences
+        return "。".join(reordered) + "。" if reordered else content
+    
+    def _enhance_completeness(self, content: str) -> str:
+        """增强完整性"""
+        # 简单的完整性增强：确保有基本信息框架
+        if "时间" not in content and "小时" not in content:
+            content = content + " 建议预留充足的游览时间。"
+        
+        if "价格" not in content and "元" not in content:
+            content = content + " 费用请提前了解。"
+        
+        return content
+    
+    def _enhance_coherence(self, content: str) -> str:
+        """增强连贯性"""
+        sentences = re.split(r'[。！？]', content)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if len(sentences) < 2:
+            return content
+        
+        # 添加连接词
+        coherence_words = ["首先", "然后", "接下来", "最后", "另外"]
+        
+        enhanced_sentences = []
+        for i, sentence in enumerate(sentences):
+            if i < len(coherence_words) and not any(word in sentence for word in coherence_words):
+                enhanced_sentences.append(f"{coherence_words[i]}，{sentence}")
+            else:
+                enhanced_sentences.append(sentence)
+        
+        return "。".join(enhanced_sentences) + "。"
+
+
+class OptimizationLoop:
+    """优化循环"""
+    
+    def __init__(self):
+        self.rag_optimizer = RAGOptimizer()
+        self.feedback_history = []
+        self.performance_metrics = {
+            "total_optimizations": 0,
+            "average_quality_improvement": 0.0,
+            "average_processing_time": 0.0
+        }
+    
+    async def run_optimization_cycle(self, query: str, retrieval_results: List[RetrievalResult],
+                                   initial_content: str = "") -> OptimizationResult:
+        """运行优化循环"""
+        result = self.rag_optimizer.optimize_generation(
+            query, retrieval_results, initial_content
         )
         
-        if not consistency_result["consistent"]:
-            quality_assessment.issues.extend([issue["description"] for issue in consistency_result["issues"]])
-            quality_assessment.overall_score *= consistency_result["confidence"]
+        # 更新性能指标
+        self._update_metrics(result)
         
-        generation_time = (datetime.now() - start_time).total_seconds()
+        # 记录反馈
+        self.feedback_history.append({
+            "timestamp": datetime.now(),
+            "query": query,
+            "quality_improvement": result.quality_improvement,
+            "optimization_steps": result.optimization_steps
+        })
         
-        return GenerationResult(
-            content=generated_content,
-            fused_context=fused_context,
-            quality_assessment=quality_assessment,
-            generation_time=generation_time,
-            metadata={
-                "iterations": iteration_count,
-                "final_quality": quality_assessment.overall_score,
-                "consistency_check": consistency_result,
-                "optimization_config": self.optimization_config
-            }
+        return result
+    
+    def _update_metrics(self, result: OptimizationResult):
+        """更新性能指标"""
+        self.performance_metrics["total_optimizations"] += 1
+        
+        # 更新平均质量改进
+        total = self.performance_metrics["total_optimizations"]
+        current_avg_quality = self.performance_metrics["average_quality_improvement"]
+        self.performance_metrics["average_quality_improvement"] = (
+            (current_avg_quality * (total - 1) + result.quality_improvement) / total
+        )
+        
+        # 更新平均处理时间
+        current_avg_time = self.performance_metrics["average_processing_time"]
+        self.performance_metrics["average_processing_time"] = (
+            (current_avg_time * (total - 1) + result.processing_time) / total
         )
     
-    async def _generate_content(self, 
-                               fused_context: FusedContext, 
-                               query_analysis: QueryAnalysis) -> str:
-        """生成内容（模拟实现）"""
-        # 这里应该调用实际的生成模型
-        # 作为演示，我们基于融合上下文生成简化的响应
-        
-        query = query_analysis.original_query
-        context = fused_context.content
-        
-        # 简化的生成逻辑
-        if query_analysis.query_type.value == "factual":
-            generated = f"根据查询'{query}'，以下是相关信息：\n\n{context}\n\n总结：基于以上信息可以了解到相关的事实和详情。"
-        elif query_analysis.query_type.value == "procedural":
-            generated = f"关于'{query}'的方法和步骤：\n\n{context}\n\n按照以上步骤可以完成相关操作。"
-        elif query_analysis.query_type.value == "recommendation":
-            generated = f"针对'{query}'的推荐建议：\n\n{context}\n\n综合考虑以上因素，建议根据个人需求选择合适的选项。"
-        elif query_analysis.query_type.value == "comparison":
-            generated = f"关于'{query}'的比较分析：\n\n{context}\n\n通过比较可以看出各选项的优缺点，建议根据实际需求决策。"
-        else:
-            generated = f"关于'{query}'的相关信息：\n\n{context}\n\n希望这些信息对您有所帮助。"
-        
-        return generated
-    
-    async def _optimize_context_based_on_feedback(self,
-                                                 context: FusedContext,
-                                                 quality_assessment: QualityAssessment,
-                                                 query_analysis: QueryAnalysis) -> FusedContext:
-        """基于反馈优化上下文"""
-        # 分析质量问题并调整上下文
-        optimized_context = context
-        
-        # 如果相关性不足，增强关键词匹配
-        if quality_assessment.metrics.get("relevance", 1.0) < 0.6:
-            # 在上下文中突出显示关键词相关的内容
-            content_lines = context.content.split('\n')
-            keyword_enhanced_lines = []
-            
-            for line in content_lines:
-                enhanced_line = line
-                for keyword in query_analysis.keywords[:5]:  # 只处理前5个关键词
-                    if keyword.lower() in line.lower():
-                        enhanced_line = f"**{line}**"  # 标记重要行
-                        break
-                keyword_enhanced_lines.append(enhanced_line)
-            
-            optimized_context.content = '\n'.join(keyword_enhanced_lines)
-        
-        # 如果连贯性不足，添加过渡句
-        if quality_assessment.metrics.get("coherence", 1.0) < 0.7:
-            paragraphs = context.content.split('\n\n')
-            connected_paragraphs = []
-            
-            for i, paragraph in enumerate(paragraphs):
-                connected_paragraphs.append(paragraph)
-                if i < len(paragraphs) - 1:
-                    # 添加简单的过渡句
-                    transitions = ["此外，", "另外，", "同时，", "进一步地，"]
-                    if i < len(transitions):
-                        connected_paragraphs.append(transitions[i % len(transitions)])
-            
-            optimized_context.content = '\n\n'.join(connected_paragraphs)
-        
-        # 如果完整性不足，尝试扩展内容
-        if quality_assessment.metrics.get("completeness", 1.0) < 0.8:
-            # 在内容末尾添加总结
-            summary = "\n\n总结：以上信息提供了全面的答案，涵盖了查询的主要方面。"
-            optimized_context.content += summary
-        
-        return optimized_context
-    
-    def update_optimization_config(self, new_config: Dict[str, Any]):
-        """更新优化配置"""
-        self.optimization_config.update(new_config)
-        logger.info(f"优化配置已更新: {new_config}")
-    
-    def get_optimization_stats(self) -> Dict[str, Any]:
-        """获取优化统计"""
+    def get_performance_summary(self) -> Dict[str, Any]:
+        """获取性能摘要"""
         return {
-            "fusion_stats": {},  # 可以从context_fusion获取
-            "compression_stats": self.context_compressor.get_compression_stats(),
-            "evaluation_stats": self.quality_evaluator.get_evaluation_stats(),
-            "current_config": self.optimization_config
+            "metrics": self.performance_metrics,
+            "recent_feedback": self.feedback_history[-10:],  # 最近10次反馈
+            "optimization_trends": self._analyze_trends()
+        }
+    
+    def _analyze_trends(self) -> Dict[str, Any]:
+        """分析优化趋势"""
+        if len(self.feedback_history) < 5:
+            return {"trend": "insufficient_data"}
+        
+        recent_improvements = [fb["quality_improvement"] for fb in self.feedback_history[-10:]]
+        avg_recent = sum(recent_improvements) / len(recent_improvements)
+        
+        earlier_improvements = [fb["quality_improvement"] for fb in self.feedback_history[-20:-10]]
+        avg_earlier = sum(earlier_improvements) / len(earlier_improvements) if earlier_improvements else 0
+        
+        if avg_recent > avg_earlier + 0.05:
+            trend = "improving"
+        elif avg_recent < avg_earlier - 0.05:
+            trend = "declining"
+        else:
+            trend = "stable"
+        
+        return {
+            "trend": trend,
+            "recent_average": avg_recent,
+            "earlier_average": avg_earlier,
+            "trend_strength": abs(avg_recent - avg_earlier)
         }
 
 
-# 全局生成优化器实例
-_generation_optimizer: Optional[GenerationOptimizer] = None
+# 全局优化循环实例
+_optimization_loop: Optional[OptimizationLoop] = None
 
 
-def get_generation_optimizer() -> GenerationOptimizer:
-    """获取生成优化器实例"""
-    global _generation_optimizer
-    if _generation_optimizer is None:
-        _generation_optimizer = GenerationOptimizer()
-    return _generation_optimizer 
+def get_optimization_loop() -> OptimizationLoop:
+    """获取优化循环实例"""
+    global _optimization_loop
+    if _optimization_loop is None:
+        _optimization_loop = OptimizationLoop()
+    return _optimization_loop 

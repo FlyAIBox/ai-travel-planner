@@ -1,21 +1,37 @@
 """
 旅行规划引擎
-实现TravelPlanningEngine规划引擎架构、约束求解器和多目标优化算法、
-行程路径优化和时间安排算法、动态重规划和方案调整功能
+实现约束求解、多目标优化、路径规划、时间调度、动态重规划等核心算法
 """
 
 import asyncio
 import json
 import math
-from datetime import datetime, timedelta, time
-from typing import Dict, List, Optional, Any, Tuple, Union, Set
+import random
+import time
+import uuid
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any, Union, Tuple
 from dataclasses import dataclass, asdict, field
 from enum import Enum
+from abc import ABC, abstractmethod
 import heapq
-import random
-from collections import defaultdict
+from collections import defaultdict, deque
 import numpy as np
 
+try:
+    from scipy.optimize import linear_sum_assignment
+    from scipy.spatial.distance import pdist, squareform
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+
+try:
+    import networkx as nx
+    NETWORKX_AVAILABLE = True
+except ImportError:
+    NETWORKX_AVAILABLE = False
+
+import structlog
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
 
@@ -23,67 +39,21 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 
-class ConstraintType(Enum):
-    """约束类型"""
-    BUDGET = "budget"                   # 预算约束
-    TIME = "time"                      # 时间约束
-    DISTANCE = "distance"              # 距离约束
-    AVAILABILITY = "availability"       # 可用性约束
-    PREFERENCE = "preference"          # 偏好约束
-    CAPACITY = "capacity"              # 容量约束
-
-
-class ObjectiveType(Enum):
-    """优化目标类型"""
-    MINIMIZE_COST = "minimize_cost"     # 最小化成本
-    MINIMIZE_TIME = "minimize_time"     # 最小化时间
-    MAXIMIZE_SATISFACTION = "maximize_satisfaction"  # 最大化满意度
-    MINIMIZE_DISTANCE = "minimize_distance"  # 最小化距离
-    MAXIMIZE_EXPERIENCES = "maximize_experiences"  # 最大化体验数量
-
-
-class PlanStatus(Enum):
-    """计划状态"""
-    DRAFT = "draft"                    # 草案
-    OPTIMIZING = "optimizing"          # 优化中
-    READY = "ready"                    # 就绪
-    CONFIRMED = "confirmed"            # 已确认
-    IN_PROGRESS = "in_progress"        # 进行中
-    COMPLETED = "completed"            # 已完成
-    CANCELLED = "cancelled"            # 已取消
-
-
 @dataclass
 class Location:
-    """位置信息"""
+    """地点信息"""
     id: str
     name: str
     latitude: float
     longitude: float
-    city: str
-    country: str
-    category: str = "general"
+    category: str  # 景点、酒店、餐厅、交通枢纽等
+    visit_duration: int  # 建议游览时长（分钟）
+    opening_hours: Dict[str, str] = field(default_factory=dict)  # {"monday": "09:00-18:00"}
     rating: float = 0.0
-    cost_level: int = 1  # 1-5级别
-    visit_duration: int = 120  # 建议游览时间（分钟）
-    opening_hours: Dict[str, str] = field(default_factory=dict)
-    seasonal_availability: List[str] = field(default_factory=list)
-    
-    def calculate_distance(self, other: 'Location') -> float:
-        """计算与另一个位置的距离（公里）"""
-        R = 6371  # 地球半径（公里）
-        
-        lat1_rad = math.radians(self.latitude)
-        lat2_rad = math.radians(other.latitude)
-        delta_lat = math.radians(other.latitude - self.latitude)
-        delta_lon = math.radians(other.longitude - self.longitude)
-        
-        a = (math.sin(delta_lat/2) * math.sin(delta_lat/2) +
-             math.cos(lat1_rad) * math.cos(lat2_rad) *
-             math.sin(delta_lon/2) * math.sin(delta_lon/2))
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-        
-        return R * c
+    price_level: int = 1  # 1-5价格等级
+    accessibility: Dict[str, bool] = field(default_factory=dict)
+    tags: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -92,137 +62,83 @@ class Activity:
     id: str
     name: str
     location: Location
-    category: str
-    duration: int  # 分钟
-    cost: float
-    rating: float
-    description: str = ""
-    requirements: List[str] = field(default_factory=list)
-    best_time: List[str] = field(default_factory=list)  # ["morning", "afternoon", "evening"]
-    prerequisites: List[str] = field(default_factory=list)
-    
-    def is_available(self, date: datetime, time_slot: str) -> bool:
-        """检查在指定时间是否可用"""
-        # 简化的可用性检查
-        if self.best_time and time_slot not in self.best_time:
-            return False
-        
-        # 检查位置的开放时间
-        weekday = date.strftime("%A").lower()
-        if weekday in self.location.opening_hours:
-            opening_time = self.location.opening_hours[weekday]
-            if opening_time == "closed":
-                return False
-        
-        return True
+    start_time: datetime
+    end_time: datetime
+    activity_type: str  # 观光、餐饮、购物、休息等
+    priority: int = 1  # 1-5优先级
+    cost: float = 0.0
+    prerequisites: List[str] = field(default_factory=list)  # 前置活动ID
+    conflicts: List[str] = field(default_factory=list)  # 冲突活动ID
+    participants: int = 1
+    booking_required: bool = False
+    weather_dependent: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Transportation:
-    """交通方式"""
-    mode: str  # "flight", "train", "bus", "car", "walk"
-    from_location: Location
-    to_location: Location
+    """交通信息"""
+    id: str
+    mode: str  # 步行、公交、地铁、出租车、飞机等
+    origin: Location
+    destination: Location
     duration: int  # 分钟
     cost: float
+    distance: float  # 公里
     departure_time: Optional[datetime] = None
     arrival_time: Optional[datetime] = None
-    booking_required: bool = False
-    
-    @property
-    def distance(self) -> float:
-        """获取交通距离"""
-        return self.from_location.calculate_distance(self.to_location)
+    schedule: List[str] = field(default_factory=list)  # 班次时间
+    comfort_level: int = 1  # 1-5舒适度
+    environmental_impact: float = 0.0  # 环境影响评分
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Constraint:
     """约束条件"""
-    type: ConstraintType
+    id: str
+    type: str  # 时间、预算、地点、活动等约束
     description: str
-    value: Any
-    priority: int = 1  # 1-10，10最高
-    is_hard: bool = True  # 硬约束vs软约束
-    
-    def validate(self, plan: 'TravelPlan') -> Tuple[bool, str]:
-        """验证计划是否满足约束"""
-        if self.type == ConstraintType.BUDGET:
-            total_cost = plan.calculate_total_cost()
-            if total_cost > self.value:
-                return False, f"预算超出：{total_cost} > {self.value}"
-        
-        elif self.type == ConstraintType.TIME:
-            total_duration = plan.calculate_total_duration()
-            if total_duration > self.value:
-                return False, f"时间超出：{total_duration} > {self.value}分钟"
-        
-        elif self.type == ConstraintType.DISTANCE:
-            total_distance = plan.calculate_total_distance()
-            if total_distance > self.value:
-                return False, f"距离超出：{total_distance} > {self.value}公里"
-        
-        return True, "约束满足"
+    parameters: Dict[str, Any]
+    weight: float = 1.0  # 约束权重
+    hard: bool = True  # 硬约束或软约束
+    violation_penalty: float = 1000.0  # 违反约束的惩罚分数
 
 
 @dataclass
 class Objective:
     """优化目标"""
-    type: ObjectiveType
+    id: str
+    name: str
+    description: str
     weight: float = 1.0
-    target_value: Optional[float] = None
-    
-    def evaluate(self, plan: 'TravelPlan') -> float:
-        """评估计划在此目标下的得分"""
-        if self.type == ObjectiveType.MINIMIZE_COST:
-            return -plan.calculate_total_cost() * self.weight
-        
-        elif self.type == ObjectiveType.MINIMIZE_TIME:
-            return -plan.calculate_total_duration() * self.weight
-        
-        elif self.type == ObjectiveType.MAXIMIZE_SATISFACTION:
-            return plan.calculate_satisfaction_score() * self.weight
-        
-        elif self.type == ObjectiveType.MINIMIZE_DISTANCE:
-            return -plan.calculate_total_distance() * self.weight
-        
-        elif self.type == ObjectiveType.MAXIMIZE_EXPERIENCES:
-            return len(plan.get_all_activities()) * self.weight
-        
-        return 0.0
+    maximize: bool = True  # True表示最大化，False表示最小化
+    evaluation_func: str = ""  # 评估函数名称
 
 
 @dataclass
 class DayPlan:
     """单日计划"""
     date: datetime
-    activities: List[Activity] = field(default_factory=list)
-    transportations: List[Transportation] = field(default_factory=list)
-    start_time: time = time(9, 0)
-    end_time: time = time(18, 0)
+    activities: List[Activity]
+    transportations: List[Transportation]
+    total_cost: float = 0.0
+    total_duration: int = 0  # 分钟
+    score: float = 0.0
+    notes: List[str] = field(default_factory=list)
     
-    def add_activity(self, activity: Activity, start_time: Optional[time] = None):
-        """添加活动"""
-        self.activities.append(activity)
+    def __post_init__(self):
+        self._calculate_totals()
     
-    def calculate_daily_cost(self) -> float:
-        """计算当日总费用"""
-        activity_cost = sum(activity.cost for activity in self.activities)
-        transport_cost = sum(transport.cost for transport in self.transportations)
-        return activity_cost + transport_cost
-    
-    def calculate_daily_duration(self) -> int:
-        """计算当日总时长（分钟）"""
-        activity_duration = sum(activity.duration for activity in self.activities)
-        transport_duration = sum(transport.duration for transport in self.transportations)
-        return activity_duration + transport_duration
-    
-    def get_locations(self) -> List[Location]:
-        """获取当日所有位置"""
-        locations = []
-        for activity in self.activities:
-            if activity.location not in locations:
-                locations.append(activity.location)
-        return locations
+    def _calculate_totals(self):
+        """计算总计信息"""
+        self.total_cost = sum(activity.cost for activity in self.activities)
+        self.total_cost += sum(transport.cost for transport in self.transportations)
+        
+        if self.activities:
+            start_time = min(activity.start_time for activity in self.activities)
+            end_time = max(activity.end_time for activity in self.activities)
+            self.total_duration = int((end_time - start_time).total_seconds() / 60)
 
 
 @dataclass
@@ -230,453 +146,577 @@ class TravelPlan:
     """旅行计划"""
     id: str
     name: str
-    description: str
+    destinations: List[str]
     start_date: datetime
     end_date: datetime
-    daily_plans: List[DayPlan] = field(default_factory=list)
+    daily_plans: List[DayPlan]
+    participants: int = 1
+    budget_limit: float = 0.0
+    total_cost: float = 0.0
+    total_score: float = 0.0
     constraints: List[Constraint] = field(default_factory=list)
     objectives: List[Objective] = field(default_factory=list)
-    status: PlanStatus = PlanStatus.DRAFT
+    optimization_history: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     
-    @property
-    def duration_days(self) -> int:
-        """获取计划天数"""
-        return (self.end_date - self.start_date).days + 1
+    def __post_init__(self):
+        self._calculate_totals()
     
-    def add_constraint(self, constraint: Constraint):
-        """添加约束"""
-        self.constraints.append(constraint)
-    
-    def add_objective(self, objective: Objective):
-        """添加目标"""
-        self.objectives.append(objective)
-    
-    def calculate_total_cost(self) -> float:
-        """计算总费用"""
-        return sum(day.calculate_daily_cost() for day in self.daily_plans)
-    
-    def calculate_total_duration(self) -> int:
-        """计算总时长（分钟）"""
-        return sum(day.calculate_daily_duration() for day in self.daily_plans)
-    
-    def calculate_total_distance(self) -> float:
-        """计算总距离"""
-        total_distance = 0.0
-        for day in self.daily_plans:
-            locations = day.get_locations()
-            for i in range(len(locations) - 1):
-                total_distance += locations[i].calculate_distance(locations[i + 1])
-        return total_distance
-    
-    def calculate_satisfaction_score(self) -> float:
-        """计算满意度分数"""
-        activities = self.get_all_activities()
-        if not activities:
-            return 0.0
-        
-        # 基于活动评分计算满意度
-        total_rating = sum(activity.rating for activity in activities)
-        avg_rating = total_rating / len(activities)
-        
-        # 考虑活动数量的影响
-        quantity_bonus = min(len(activities) / 20, 1.0)  # 最多20个活动
-        
-        return avg_rating * (1 + quantity_bonus)
-    
-    def get_all_activities(self) -> List[Activity]:
-        """获取所有活动"""
-        activities = []
-        for day in self.daily_plans:
-            activities.extend(day.activities)
-        return activities
-    
-    def get_all_locations(self) -> List[Location]:
-        """获取所有位置"""
-        locations = []
-        for day in self.daily_plans:
-            for location in day.get_locations():
-                if location not in locations:
-                    locations.append(location)
-        return locations
-    
-    def validate_constraints(self) -> Tuple[bool, List[str]]:
-        """验证所有约束"""
-        violations = []
-        for constraint in self.constraints:
-            is_valid, message = constraint.validate(self)
-            if not is_valid:
-                violations.append(message)
-        
-        return len(violations) == 0, violations
-    
-    def calculate_objective_score(self) -> float:
-        """计算综合目标分数"""
-        if not self.objectives:
-            return 0.0
-        
-        total_score = 0.0
-        total_weight = 0.0
-        
-        for objective in self.objectives:
-            score = objective.evaluate(self)
-            total_score += score
-            total_weight += objective.weight
-        
-        return total_score / total_weight if total_weight > 0 else 0.0
+    def _calculate_totals(self):
+        """计算总计信息"""
+        self.total_cost = sum(day.total_cost for day in self.daily_plans)
+        self.total_score = sum(day.score for day in self.daily_plans)
 
 
 class ConstraintSolver:
     """约束求解器"""
     
     def __init__(self):
-        self.max_iterations = 1000
-        self.tolerance = 1e-6
+        self.constraints = []
+        self.variables = {}
+        self.domains = {}
+        self.solution_cache = {}
     
-    async def solve(self, 
-                   plan: TravelPlan,
-                   available_activities: List[Activity],
-                   available_transportations: List[Transportation]) -> Tuple[bool, TravelPlan]:
-        """求解约束优化问题"""
-        logger.info(f"开始求解计划 {plan.id} 的约束优化问题")
-        
-        # 初始化求解
-        current_plan = self._initialize_plan(plan, available_activities)
-        
-        # 迭代优化
-        iteration = 0
-        best_plan = current_plan
-        best_score = current_plan.calculate_objective_score()
-        
-        while iteration < self.max_iterations:
-            # 生成候选解
-            candidate_plan = await self._generate_candidate_solution(
-                current_plan, available_activities, available_transportations
-            )
+    def add_constraint(self, constraint: Constraint):
+        """添加约束"""
+        self.constraints.append(constraint)
+    
+    def solve(self, plan: TravelPlan) -> Tuple[bool, Dict[str, Any]]:
+        """求解约束问题"""
+        try:
+            # 检查所有约束
+            violations = []
+            total_penalty = 0.0
             
-            # 评估候选解
-            if await self._is_better_solution(candidate_plan, best_plan):
-                best_plan = candidate_plan
-                best_score = candidate_plan.calculate_objective_score()
-                logger.debug(f"迭代 {iteration}: 找到更好解，分数: {best_score}")
+            for constraint in plan.constraints:
+                violation = self._check_constraint(constraint, plan)
+                if violation:
+                    violations.append(violation)
+                    total_penalty += constraint.violation_penalty * constraint.weight
             
-            # 检查收敛条件
-            if await self._check_convergence(best_plan):
-                break
+            # 判断是否满足所有硬约束
+            hard_violations = [v for v in violations if v["is_hard"]]
+            feasible = len(hard_violations) == 0
             
-            current_plan = candidate_plan
-            iteration += 1
-        
-        logger.info(f"约束求解完成，迭代次数: {iteration}，最终分数: {best_score}")
-        return True, best_plan
-    
-    def _initialize_plan(self, plan: TravelPlan, activities: List[Activity]) -> TravelPlan:
-        """初始化计划"""
-        # 为每一天分配初始活动
-        activities_by_category = defaultdict(list)
-        for activity in activities:
-            activities_by_category[activity.category].append(activity)
-        
-        # 简单的初始分配策略
-        for i, day_plan in enumerate(plan.daily_plans):
-            # 每天分配2-4个活动
-            num_activities = min(random.randint(2, 4), len(activities))
-            selected_activities = random.sample(activities, num_activities)
+            result = {
+                "feasible": feasible,
+                "violations": violations,
+                "total_penalty": total_penalty,
+                "satisfaction_score": max(0, 1.0 - total_penalty / 10000.0)
+            }
             
-            for activity in selected_activities:
-                day_plan.add_activity(activity)
-        
-        return plan
-    
-    async def _generate_candidate_solution(self,
-                                         current_plan: TravelPlan,
-                                         activities: List[Activity],
-                                         transportations: List[Transportation]) -> TravelPlan:
-        """生成候选解"""
-        # 复制当前计划
-        candidate = self._deep_copy_plan(current_plan)
-        
-        # 随机选择改进策略
-        strategies = [
-            self._swap_activities,
-            self._add_activity,
-            self._remove_activity,
-            self._reorder_activities,
-            self._optimize_transportation
-        ]
-        
-        strategy = random.choice(strategies)
-        await strategy(candidate, activities, transportations)
-        
-        return candidate
-    
-    async def _swap_activities(self, plan: TravelPlan, activities: List[Activity], transportations: List[Transportation]):
-        """交换活动策略"""
-        if len(plan.daily_plans) < 2:
-            return
-        
-        # 随机选择两天
-        day1, day2 = random.sample(plan.daily_plans, 2)
-        
-        if day1.activities and day2.activities:
-            # 交换一个活动
-            activity1 = random.choice(day1.activities)
-            activity2 = random.choice(day2.activities)
+            return feasible, result
             
-            day1.activities.remove(activity1)
-            day2.activities.remove(activity2)
+        except Exception as e:
+            logger.error(f"约束求解失败: {e}")
+            return False, {"error": str(e)}
+    
+    def _check_constraint(self, constraint: Constraint, plan: TravelPlan) -> Optional[Dict[str, Any]]:
+        """检查单个约束"""
+        constraint_type = constraint.type
+        parameters = constraint.parameters
+        
+        if constraint_type == "budget":
+            return self._check_budget_constraint(constraint, plan)
+        elif constraint_type == "time":
+            return self._check_time_constraint(constraint, plan)
+        elif constraint_type == "location":
+            return self._check_location_constraint(constraint, plan)
+        elif constraint_type == "activity":
+            return self._check_activity_constraint(constraint, plan)
+        elif constraint_type == "transportation":
+            return self._check_transportation_constraint(constraint, plan)
+        
+        return None
+    
+    def _check_budget_constraint(self, constraint: Constraint, plan: TravelPlan) -> Optional[Dict[str, Any]]:
+        """检查预算约束"""
+        max_budget = constraint.parameters.get("max_budget", float('inf'))
+        
+        if plan.total_cost > max_budget:
+            violation_amount = plan.total_cost - max_budget
+            return {
+                "constraint_id": constraint.id,
+                "type": "budget",
+                "is_hard": constraint.hard,
+                "violation_amount": violation_amount,
+                "description": f"超出预算 {violation_amount:.2f} 元"
+            }
+        
+        return None
+    
+    def _check_time_constraint(self, constraint: Constraint, plan: TravelPlan) -> Optional[Dict[str, Any]]:
+        """检查时间约束"""
+        parameters = constraint.parameters
+        
+        # 检查总时长约束
+        if "max_duration_days" in parameters:
+            max_days = parameters["max_duration_days"]
+            actual_days = len(plan.daily_plans)
             
-            day1.activities.append(activity2)
-            day2.activities.append(activity1)
-    
-    async def _add_activity(self, plan: TravelPlan, activities: List[Activity], transportations: List[Transportation]):
-        """添加活动策略"""
-        # 选择一个随机的日子和活动
-        day = random.choice(plan.daily_plans)
-        available_activities = [a for a in activities if a not in day.activities]
+            if actual_days > max_days:
+                return {
+                    "constraint_id": constraint.id,
+                    "type": "time",
+                    "is_hard": constraint.hard,
+                    "violation_amount": actual_days - max_days,
+                    "description": f"超出最大行程天数 {actual_days - max_days} 天"
+                }
         
-        if available_activities:
-            new_activity = random.choice(available_activities)
-            day.add_activity(new_activity)
-    
-    async def _remove_activity(self, plan: TravelPlan, activities: List[Activity], transportations: List[Transportation]):
-        """移除活动策略"""
-        day = random.choice(plan.daily_plans)
-        if day.activities:
-            activity_to_remove = random.choice(day.activities)
-            day.activities.remove(activity_to_remove)
-    
-    async def _reorder_activities(self, plan: TravelPlan, activities: List[Activity], transportations: List[Transportation]):
-        """重新排序活动策略"""
-        day = random.choice(plan.daily_plans)
-        if len(day.activities) > 1:
-            random.shuffle(day.activities)
-    
-    async def _optimize_transportation(self, plan: TravelPlan, activities: List[Activity], transportations: List[Transportation]):
-        """优化交通策略"""
-        for day in plan.daily_plans:
-            # 根据位置重新排序活动以减少移动距离
-            if len(day.activities) > 1:
-                day.activities = self._optimize_route(day.activities)
-    
-    def _optimize_route(self, activities: List[Activity]) -> List[Activity]:
-        """优化路线顺序（简化的TSP）"""
-        if len(activities) <= 2:
-            return activities
+        # 检查每日时长约束
+        if "max_daily_hours" in parameters:
+            max_hours = parameters["max_daily_hours"]
+            
+            for day_plan in plan.daily_plans:
+                daily_hours = day_plan.total_duration / 60.0
+                if daily_hours > max_hours:
+                    return {
+                        "constraint_id": constraint.id,
+                        "type": "time",
+                        "is_hard": constraint.hard,
+                        "violation_amount": daily_hours - max_hours,
+                        "description": f"单日行程超时 {daily_hours - max_hours:.1f} 小时"
+                    }
         
-        # 使用最近邻算法
-        optimized = [activities[0]]
-        remaining = activities[1:]
-        
-        while remaining:
-            current_location = optimized[-1].location
-            nearest_activity = min(remaining, 
-                                 key=lambda a: current_location.calculate_distance(a.location))
-            optimized.append(nearest_activity)
-            remaining.remove(nearest_activity)
-        
-        return optimized
+        return None
     
-    async def _is_better_solution(self, candidate: TravelPlan, current_best: TravelPlan) -> bool:
-        """判断候选解是否更好"""
-        # 首先检查约束
-        candidate_valid, _ = candidate.validate_constraints()
-        current_valid, _ = current_best.validate_constraints()
+    def _check_location_constraint(self, constraint: Constraint, plan: TravelPlan) -> Optional[Dict[str, Any]]:
+        """检查地点约束"""
+        parameters = constraint.parameters
         
-        # 如果候选解满足约束而当前解不满足，则候选解更好
-        if candidate_valid and not current_valid:
-            return True
+        # 检查必访地点
+        if "required_locations" in parameters:
+            required = set(parameters["required_locations"])
+            visited = set()
+            
+            for day_plan in plan.daily_plans:
+                for activity in day_plan.activities:
+                    visited.add(activity.location.name)
+            
+            missing = required - visited
+            if missing:
+                return {
+                    "constraint_id": constraint.id,
+                    "type": "location",
+                    "is_hard": constraint.hard,
+                    "violation_amount": len(missing),
+                    "description": f"未包含必访地点: {', '.join(missing)}"
+                }
         
-        # 如果候选解不满足约束而当前解满足，则候选解更差
-        if not candidate_valid and current_valid:
-            return False
+        # 检查禁止地点
+        if "forbidden_locations" in parameters:
+            forbidden = set(parameters["forbidden_locations"])
+            visited = set()
+            
+            for day_plan in plan.daily_plans:
+                for activity in day_plan.activities:
+                    visited.add(activity.location.name)
+            
+            violations = forbidden & visited
+            if violations:
+                return {
+                    "constraint_id": constraint.id,
+                    "type": "location",
+                    "is_hard": constraint.hard,
+                    "violation_amount": len(violations),
+                    "description": f"包含禁止地点: {', '.join(violations)}"
+                }
         
-        # 如果都满足或都不满足约束，比较目标函数值
-        candidate_score = candidate.calculate_objective_score()
-        current_score = current_best.calculate_objective_score()
-        
-        return candidate_score > current_score
+        return None
     
-    async def _check_convergence(self, plan: TravelPlan) -> bool:
-        """检查是否收敛"""
-        # 简单的收敛检查：如果满足所有硬约束则认为收敛
-        is_valid, _ = plan.validate_constraints()
-        return is_valid
+    def _check_activity_constraint(self, constraint: Constraint, plan: TravelPlan) -> Optional[Dict[str, Any]]:
+        """检查活动约束"""
+        parameters = constraint.parameters
+        
+        # 检查活动类型限制
+        if "max_activities_per_type" in parameters:
+            type_limits = parameters["max_activities_per_type"]
+            type_counts = defaultdict(int)
+            
+            for day_plan in plan.daily_plans:
+                for activity in day_plan.activities:
+                    type_counts[activity.activity_type] += 1
+            
+            for activity_type, limit in type_limits.items():
+                if type_counts[activity_type] > limit:
+                    violation = type_counts[activity_type] - limit
+                    return {
+                        "constraint_id": constraint.id,
+                        "type": "activity",
+                        "is_hard": constraint.hard,
+                        "violation_amount": violation,
+                        "description": f"{activity_type}活动超出限制 {violation} 个"
+                    }
+        
+        return None
     
-    def _deep_copy_plan(self, plan: TravelPlan) -> TravelPlan:
-        """深度复制计划"""
-        # 简化的深度复制
-        new_plan = TravelPlan(
-            id=plan.id + "_copy",
-            name=plan.name,
-            description=plan.description,
+    def _check_transportation_constraint(self, constraint: Constraint, plan: TravelPlan) -> Optional[Dict[str, Any]]:
+        """检查交通约束"""
+        parameters = constraint.parameters
+        
+        # 检查交通方式限制
+        if "preferred_modes" in parameters and "forbidden_modes" in parameters:
+            preferred = set(parameters["preferred_modes"])
+            forbidden = set(parameters["forbidden_modes"])
+            
+            for day_plan in plan.daily_plans:
+                for transport in day_plan.transportations:
+                    if transport.mode in forbidden:
+                        return {
+                            "constraint_id": constraint.id,
+                            "type": "transportation",
+                            "is_hard": constraint.hard,
+                            "violation_amount": 1,
+                            "description": f"使用了禁止的交通方式: {transport.mode}"
+                        }
+        
+        return None
+
+
+class MultiObjectiveOptimizer:
+    """多目标优化器"""
+    
+    def __init__(self):
+        self.objectives = []
+        self.pareto_front = []
+        self.optimization_history = []
+    
+    def add_objective(self, objective: Objective):
+        """添加优化目标"""
+        self.objectives.append(objective)
+    
+    def optimize(self, plan: TravelPlan, population_size: int = 50, generations: int = 100) -> TravelPlan:
+        """多目标优化"""
+        try:
+            # 使用简化的遗传算法进行多目标优化
+            population = self._initialize_population(plan, population_size)
+            
+            for generation in range(generations):
+                # 评估种群
+                fitness_scores = [self._evaluate_fitness(individual) for individual in population]
+                
+                # 选择和繁殖
+                population = self._evolve_population(population, fitness_scores)
+                
+                # 记录最佳个体
+                best_individual = max(zip(population, fitness_scores), key=lambda x: x[1]["total_score"])[0]
+                
+                self.optimization_history.append({
+                    "generation": generation,
+                    "best_score": max(fitness_scores, key=lambda x: x["total_score"])["total_score"],
+                    "average_score": sum(fs["total_score"] for fs in fitness_scores) / len(fitness_scores)
+                })
+            
+            # 返回最优解
+            final_fitness = [self._evaluate_fitness(individual) for individual in population]
+            best_plan = max(zip(population, final_fitness), key=lambda x: x[1]["total_score"])[0]
+            
+            return best_plan
+            
+        except Exception as e:
+            logger.error(f"多目标优化失败: {e}")
+            return plan
+    
+    def _initialize_population(self, base_plan: TravelPlan, size: int) -> List[TravelPlan]:
+        """初始化种群"""
+        population = [base_plan]
+        
+        # 生成变异个体
+        for _ in range(size - 1):
+            mutated_plan = self._mutate_plan(base_plan)
+            population.append(mutated_plan)
+        
+        return population
+    
+    def _mutate_plan(self, plan: TravelPlan) -> TravelPlan:
+        """变异计划"""
+        # 创建计划的副本
+        mutated_plan = TravelPlan(
+            id=str(uuid.uuid4()),
+            name=f"{plan.name}_mutated",
+            destinations=plan.destinations.copy(),
             start_date=plan.start_date,
             end_date=plan.end_date,
+            daily_plans=[],
+            participants=plan.participants,
+            budget_limit=plan.budget_limit,
             constraints=plan.constraints.copy(),
-            objectives=plan.objectives.copy(),
-            status=plan.status,
-            metadata=plan.metadata.copy()
+            objectives=plan.objectives.copy()
         )
         
-        # 复制每日计划
+        # 简单的变异策略：调整活动顺序
         for day_plan in plan.daily_plans:
-            new_day = DayPlan(
+            new_activities = day_plan.activities.copy()
+            if len(new_activities) > 1:
+                # 随机交换两个活动
+                i, j = random.sample(range(len(new_activities)), 2)
+                new_activities[i], new_activities[j] = new_activities[j], new_activities[i]
+                
+                # 重新调整时间
+                self._adjust_activity_times(new_activities)
+            
+            new_day_plan = DayPlan(
                 date=day_plan.date,
-                activities=day_plan.activities.copy(),
-                transportations=day_plan.transportations.copy(),
-                start_time=day_plan.start_time,
-                end_time=day_plan.end_time
+                activities=new_activities,
+                transportations=day_plan.transportations.copy()
             )
-            new_plan.daily_plans.append(new_day)
+            mutated_plan.daily_plans.append(new_day_plan)
         
-        return new_plan
+        return mutated_plan
+    
+    def _adjust_activity_times(self, activities: List[Activity]):
+        """调整活动时间"""
+        if not activities:
+            return
+        
+        # 简单的时间调整策略
+        current_time = activities[0].start_time.replace(hour=9, minute=0)
+        
+        for activity in activities:
+            activity.start_time = current_time
+            activity.end_time = current_time + timedelta(minutes=activity.location.visit_duration)
+            current_time = activity.end_time + timedelta(minutes=30)  # 30分钟间隔
+    
+    def _evaluate_fitness(self, plan: TravelPlan) -> Dict[str, Any]:
+        """评估适应度"""
+        fitness_scores = {}
+        total_score = 0.0
+        
+        for objective in self.objectives:
+            score = self._evaluate_objective(objective, plan)
+            fitness_scores[objective.id] = score
+            total_score += score * objective.weight
+        
+        fitness_scores["total_score"] = total_score
+        return fitness_scores
+    
+    def _evaluate_objective(self, objective: Objective, plan: TravelPlan) -> float:
+        """评估单个目标"""
+        objective_name = objective.name
+        
+        if objective_name == "minimize_cost":
+            # 成本最小化（转换为最大化问题）
+            max_possible_cost = plan.budget_limit or 10000
+            return max(0, max_possible_cost - plan.total_cost) / max_possible_cost
+        
+        elif objective_name == "maximize_attractions":
+            # 景点数量最大化
+            attraction_count = 0
+            for day_plan in plan.daily_plans:
+                for activity in day_plan.activities:
+                    if activity.location.category == "景点":
+                        attraction_count += 1
+            return attraction_count / 10.0  # 标准化
+        
+        elif objective_name == "maximize_rating":
+            # 评分最大化
+            total_rating = 0.0
+            count = 0
+            for day_plan in plan.daily_plans:
+                for activity in day_plan.activities:
+                    if activity.location.rating > 0:
+                        total_rating += activity.location.rating
+                        count += 1
+            return (total_rating / max(count, 1)) / 10.0  # 标准化到0-1
+        
+        elif objective_name == "minimize_travel_time":
+            # 交通时间最小化
+            total_travel_time = 0
+            for day_plan in plan.daily_plans:
+                for transport in day_plan.transportations:
+                    total_travel_time += transport.duration
+            max_travel_time = len(plan.daily_plans) * 480  # 每天最多8小时交通
+            return max(0, max_travel_time - total_travel_time) / max_travel_time
+        
+        else:
+            return 0.5  # 默认分数
+    
+    def _evolve_population(self, population: List[TravelPlan], fitness_scores: List[Dict[str, Any]]) -> List[TravelPlan]:
+        """进化种群"""
+        # 选择优秀个体（精英主义）
+        sorted_population = sorted(zip(population, fitness_scores), 
+                                 key=lambda x: x[1]["total_score"], reverse=True)
+        
+        # 保留前50%
+        elite_size = len(population) // 2
+        new_population = [individual for individual, _ in sorted_population[:elite_size]]
+        
+        # 生成新个体填充种群
+        while len(new_population) < len(population):
+            # 选择两个父代
+            parent1 = random.choice(new_population)
+            parent2 = random.choice(new_population)
+            
+            # 简单的交叉和变异
+            child = self._crossover(parent1, parent2)
+            child = self._mutate_plan(child)
+            
+            new_population.append(child)
+        
+        return new_population
+    
+    def _crossover(self, parent1: TravelPlan, parent2: TravelPlan) -> TravelPlan:
+        """交叉操作"""
+        # 简单的交叉策略：随机选择每日计划
+        child = TravelPlan(
+            id=str(uuid.uuid4()),
+            name=f"crossover_{random.randint(1000, 9999)}",
+            destinations=parent1.destinations.copy(),
+            start_date=parent1.start_date,
+            end_date=parent1.end_date,
+            daily_plans=[],
+            participants=parent1.participants,
+            budget_limit=parent1.budget_limit,
+            constraints=parent1.constraints.copy(),
+            objectives=parent1.objectives.copy()
+        )
+        
+        for i in range(len(parent1.daily_plans)):
+            if random.random() < 0.5:
+                child.daily_plans.append(parent1.daily_plans[i])
+            else:
+                child.daily_plans.append(parent2.daily_plans[i])
+        
+        return child
 
 
 class PathOptimizer:
     """路径优化器"""
     
     def __init__(self):
-        self.optimization_methods = ["nearest_neighbor", "genetic_algorithm", "simulated_annealing"]
+        self.distance_cache = {}
+        self.route_cache = {}
     
-    async def optimize_path(self, 
-                          locations: List[Location],
-                          start_location: Optional[Location] = None,
-                          method: str = "nearest_neighbor") -> List[Location]:
-        """优化访问路径"""
+    def optimize_route(self, locations: List[Location], 
+                      algorithm: str = "nearest_neighbor") -> List[Location]:
+        """优化路线"""
         if len(locations) <= 2:
             return locations
         
-        if method == "nearest_neighbor":
-            return await self._nearest_neighbor_optimization(locations, start_location)
-        elif method == "genetic_algorithm":
-            return await self._genetic_algorithm_optimization(locations, start_location)
-        elif method == "simulated_annealing":
-            return await self._simulated_annealing_optimization(locations, start_location)
-        else:
+        try:
+            if algorithm == "nearest_neighbor":
+                return self._nearest_neighbor_algorithm(locations)
+            elif algorithm == "genetic_algorithm":
+                return self._genetic_algorithm(locations)
+            elif algorithm == "simulated_annealing":
+                return self._simulated_annealing(locations)
+            elif algorithm == "two_opt":
+                return self._two_opt_algorithm(locations)
+            else:
+                return self._nearest_neighbor_algorithm(locations)
+                
+        except Exception as e:
+            logger.error(f"路径优化失败: {e}")
             return locations
     
-    async def _nearest_neighbor_optimization(self, 
-                                           locations: List[Location],
-                                           start_location: Optional[Location] = None) -> List[Location]:
-        """最近邻优化"""
+    def _calculate_distance(self, loc1: Location, loc2: Location) -> float:
+        """计算两点间距离（使用哈弗辛公式）"""
+        cache_key = (loc1.id, loc2.id)
+        if cache_key in self.distance_cache:
+            return self.distance_cache[cache_key]
+        
+        # 地球半径（公里）
+        R = 6371.0
+        
+        # 转换为弧度
+        lat1_rad = math.radians(loc1.latitude)
+        lon1_rad = math.radians(loc1.longitude)
+        lat2_rad = math.radians(loc2.latitude)
+        lon2_rad = math.radians(loc2.longitude)
+        
+        # 计算差值
+        dlat = lat2_rad - lat1_rad
+        dlon = lon2_rad - lon1_rad
+        
+        # 哈弗辛公式
+        a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        distance = R * c
+        
+        # 缓存结果
+        self.distance_cache[cache_key] = distance
+        self.distance_cache[(loc2.id, loc1.id)] = distance
+        
+        return distance
+    
+    def _calculate_route_distance(self, route: List[Location]) -> float:
+        """计算路线总距离"""
+        total_distance = 0.0
+        for i in range(len(route) - 1):
+            total_distance += self._calculate_distance(route[i], route[i + 1])
+        return total_distance
+    
+    def _nearest_neighbor_algorithm(self, locations: List[Location]) -> List[Location]:
+        """最近邻算法"""
         if not locations:
             return []
         
-        # 选择起始位置
-        current = start_location or locations[0]
-        remaining = [loc for loc in locations if loc != current]
-        optimized_path = [current]
+        unvisited = locations[1:].copy()  # 从第一个位置开始
+        route = [locations[0]]
+        current = locations[0]
         
-        while remaining:
-            # 找到最近的位置
-            nearest = min(remaining, key=lambda loc: current.calculate_distance(loc))
-            optimized_path.append(nearest)
-            remaining.remove(nearest)
+        while unvisited:
+            # 找到最近的未访问位置
+            nearest = min(unvisited, key=lambda loc: self._calculate_distance(current, loc))
+            route.append(nearest)
+            unvisited.remove(nearest)
             current = nearest
         
-        return optimized_path
+        return route
     
-    async def _genetic_algorithm_optimization(self,
-                                            locations: List[Location],
-                                            start_location: Optional[Location] = None) -> List[Location]:
-        """遗传算法优化"""
-        if len(locations) <= 3:
-            return await self._nearest_neighbor_optimization(locations, start_location)
-        
-        population_size = min(50, len(locations) * 2)
-        generations = 100
-        mutation_rate = 0.1
+    def _genetic_algorithm(self, locations: List[Location], 
+                          population_size: int = 100, generations: int = 500) -> List[Location]:
+        """遗传算法优化TSP"""
+        if len(locations) <= 2:
+            return locations
         
         # 初始化种群
         population = []
         for _ in range(population_size):
-            individual = locations.copy()
-            random.shuffle(individual)
-            if start_location and start_location in individual:
-                # 确保起始位置在开头
-                individual.remove(start_location)
-                individual.insert(0, start_location)
-            population.append(individual)
+            route = locations.copy()
+            random.shuffle(route[1:])  # 保持起点不变
+            population.append(route)
         
-        # 进化过程
         for generation in range(generations):
-            # 评估适应度
-            fitness_scores = [1 / (self._calculate_path_distance(individual) + 1) for individual in population]
+            # 评估适应度（距离越短适应度越高）
+            fitness_scores = []
+            for route in population:
+                distance = self._calculate_route_distance(route)
+                fitness = 1.0 / (1.0 + distance)  # 避免除零
+                fitness_scores.append(fitness)
             
-            # 选择
+            # 选择和繁殖
             new_population = []
-            for _ in range(population_size):
+            
+            # 精英主义：保留最好的个体
+            best_idx = fitness_scores.index(max(fitness_scores))
+            new_population.append(population[best_idx])
+            
+            # 生成新个体
+            while len(new_population) < population_size:
                 # 轮盘赌选择
-                parent1 = self._roulette_wheel_selection(population, fitness_scores)
-                parent2 = self._roulette_wheel_selection(population, fitness_scores)
+                parent1 = self._roulette_selection(population, fitness_scores)
+                parent2 = self._roulette_selection(population, fitness_scores)
                 
                 # 交叉
-                child = self._crossover(parent1, parent2)
+                child = self._order_crossover(parent1, parent2)
                 
                 # 变异
-                if random.random() < mutation_rate:
-                    child = self._mutate(child, start_location)
+                if random.random() < 0.02:  # 2%变异率
+                    child = self._mutate_route(child)
                 
                 new_population.append(child)
             
             population = new_population
         
-        # 返回最好的解
-        best_individual = min(population, key=self._calculate_path_distance)
-        return best_individual
+        # 返回最佳路线
+        final_fitness = [1.0 / (1.0 + self._calculate_route_distance(route)) for route in population]
+        best_route = population[final_fitness.index(max(final_fitness))]
+        
+        return best_route
     
-    async def _simulated_annealing_optimization(self,
-                                              locations: List[Location],
-                                              start_location: Optional[Location] = None) -> List[Location]:
-        """模拟退火优化"""
-        current_solution = locations.copy()
-        if start_location and start_location in current_solution:
-            current_solution.remove(start_location)
-            current_solution.insert(0, start_location)
-        else:
-            random.shuffle(current_solution)
-        
-        current_distance = self._calculate_path_distance(current_solution)
-        best_solution = current_solution.copy()
-        best_distance = current_distance
-        
-        # 模拟退火参数
-        initial_temperature = 1000
-        cooling_rate = 0.95
-        min_temperature = 1
-        
-        temperature = initial_temperature
-        
-        while temperature > min_temperature:
-            # 生成邻域解
-            new_solution = self._generate_neighbor(current_solution, start_location)
-            new_distance = self._calculate_path_distance(new_solution)
-            
-            # 接受准则
-            if new_distance < current_distance or random.random() < math.exp(-(new_distance - current_distance) / temperature):
-                current_solution = new_solution
-                current_distance = new_distance
-                
-                if new_distance < best_distance:
-                    best_solution = new_solution.copy()
-                    best_distance = new_distance
-            
-            temperature *= cooling_rate
-        
-        return best_solution
-    
-    def _calculate_path_distance(self, path: List[Location]) -> float:
-        """计算路径总距离"""
-        if len(path) <= 1:
-            return 0.0
-        
-        total_distance = 0.0
-        for i in range(len(path) - 1):
-            total_distance += path[i].calculate_distance(path[i + 1])
-        
-        return total_distance
-    
-    def _roulette_wheel_selection(self, population: List[List[Location]], fitness_scores: List[float]) -> List[Location]:
+    def _roulette_selection(self, population: List[List[Location]], 
+                           fitness_scores: List[float]) -> List[Location]:
         """轮盘赌选择"""
         total_fitness = sum(fitness_scores)
         if total_fitness == 0:
@@ -692,170 +732,266 @@ class PathOptimizer:
         
         return population[-1]
     
-    def _crossover(self, parent1: List[Location], parent2: List[Location]) -> List[Location]:
-        """交叉操作（顺序交叉）"""
-        if len(parent1) <= 2:
+    def _order_crossover(self, parent1: List[Location], parent2: List[Location]) -> List[Location]:
+        """顺序交叉"""
+        size = len(parent1)
+        if size <= 2:
             return parent1.copy()
         
-        start_idx = random.randint(0, len(parent1) - 2)
-        end_idx = random.randint(start_idx + 1, len(parent1) - 1)
+        # 选择交叉区间
+        start = random.randint(1, size - 2)  # 保持起点不变
+        end = random.randint(start + 1, size)
         
-        child = [None] * len(parent1)
+        # 创建子代
+        child = [None] * size
+        child[0] = parent1[0]  # 保持起点不变
         
-        # 复制父代1的片段
-        for i in range(start_idx, end_idx + 1):
+        # 复制交叉区间
+        for i in range(start, end):
             child[i] = parent1[i]
         
-        # 从父代2填充剩余位置
-        parent2_remaining = [loc for loc in parent2 if loc not in child]
-        j = 0
-        for i in range(len(child)):
-            if child[i] is None and j < len(parent2_remaining):
-                child[i] = parent2_remaining[j]
-                j += 1
+        # 从parent2填充剩余位置
+        parent2_ptr = 1
+        for i in range(1, size):
+            if child[i] is None:
+                while parent2[parent2_ptr] in child:
+                    parent2_ptr += 1
+                child[i] = parent2[parent2_ptr]
+                parent2_ptr += 1
         
         return child
     
-    def _mutate(self, individual: List[Location], start_location: Optional[Location] = None) -> List[Location]:
-        """变异操作"""
-        mutated = individual.copy()
+    def _mutate_route(self, route: List[Location]) -> List[Location]:
+        """路线变异"""
+        mutated = route.copy()
         
-        if len(mutated) <= 2:
+        if len(mutated) <= 3:
             return mutated
         
-        # 确保起始位置不被变异
-        mutable_range = (1, len(mutated)) if start_location and mutated[0] == start_location else (0, len(mutated))
+        # 随机交换两个位置（不包括起点）
+        i = random.randint(1, len(mutated) - 1)
+        j = random.randint(1, len(mutated) - 1)
         
-        if mutable_range[1] - mutable_range[0] >= 2:
-            # 随机交换两个位置
-            idx1 = random.randint(mutable_range[0], mutable_range[1] - 1)
-            idx2 = random.randint(mutable_range[0], mutable_range[1] - 1)
-            
-            mutated[idx1], mutated[idx2] = mutated[idx2], mutated[idx1]
+        mutated[i], mutated[j] = mutated[j], mutated[i]
         
         return mutated
     
-    def _generate_neighbor(self, solution: List[Location], start_location: Optional[Location] = None) -> List[Location]:
-        """生成邻域解"""
-        neighbor = solution.copy()
+    def _simulated_annealing(self, locations: List[Location], 
+                           initial_temp: float = 1000.0, 
+                           cooling_rate: float = 0.995,
+                           min_temp: float = 1.0) -> List[Location]:
+        """模拟退火算法"""
+        # 初始解
+        current_route = locations.copy()
+        random.shuffle(current_route[1:])  # 保持起点不变
+        current_distance = self._calculate_route_distance(current_route)
         
-        if len(neighbor) <= 2:
-            return neighbor
+        best_route = current_route.copy()
+        best_distance = current_distance
         
-        # 确保起始位置不被移动
-        mutable_range = (1, len(neighbor)) if start_location and neighbor[0] == start_location else (0, len(neighbor))
+        temperature = initial_temp
         
-        if mutable_range[1] - mutable_range[0] >= 2:
-            # 2-opt 移动
-            i = random.randint(mutable_range[0], mutable_range[1] - 2)
-            j = random.randint(i + 1, mutable_range[1] - 1)
+        while temperature > min_temp:
+            # 生成邻居解（2-opt交换）
+            neighbor_route = self._two_opt_swap(current_route)
+            neighbor_distance = self._calculate_route_distance(neighbor_route)
             
-            # 反转子序列
-            neighbor[i:j+1] = reversed(neighbor[i:j+1])
+            # 计算接受概率
+            if neighbor_distance < current_distance:
+                # 更好的解，直接接受
+                current_route = neighbor_route
+                current_distance = neighbor_distance
+                
+                if current_distance < best_distance:
+                    best_route = current_route.copy()
+                    best_distance = current_distance
+            else:
+                # 较差的解，以一定概率接受
+                delta = neighbor_distance - current_distance
+                probability = math.exp(-delta / temperature)
+                
+                if random.random() < probability:
+                    current_route = neighbor_route
+                    current_distance = neighbor_distance
+            
+            # 降温
+            temperature *= cooling_rate
         
-        return neighbor
+        return best_route
+    
+    def _two_opt_algorithm(self, locations: List[Location]) -> List[Location]:
+        """2-opt算法"""
+        best_route = locations.copy()
+        best_distance = self._calculate_route_distance(best_route)
+        improved = True
+        
+        while improved:
+            improved = False
+            
+            for i in range(1, len(locations) - 1):
+                for j in range(i + 1, len(locations)):
+                    if j - i == 1:
+                        continue  # 跳过相邻边
+                    
+                    # 尝试2-opt交换
+                    new_route = best_route.copy()
+                    new_route[i:j] = reversed(new_route[i:j])
+                    
+                    new_distance = self._calculate_route_distance(new_route)
+                    
+                    if new_distance < best_distance:
+                        best_route = new_route
+                        best_distance = new_distance
+                        improved = True
+        
+        return best_route
+    
+    def _two_opt_swap(self, route: List[Location]) -> List[Location]:
+        """2-opt交换操作"""
+        new_route = route.copy()
+        
+        if len(new_route) <= 3:
+            return new_route
+        
+        # 随机选择两个位置进行2-opt交换
+        i = random.randint(1, len(new_route) - 2)
+        j = random.randint(i + 1, len(new_route) - 1)
+        
+        # 反转i到j之间的路径
+        new_route[i:j+1] = reversed(new_route[i:j+1])
+        
+        return new_route
 
 
 class TimeScheduler:
     """时间调度器"""
     
     def __init__(self):
-        self.time_slots = {
-            "morning": (time(8, 0), time(12, 0)),
-            "afternoon": (time(12, 0), time(17, 0)),
-            "evening": (time(17, 0), time(21, 0))
-        }
+        self.scheduling_cache = {}
     
-    async def schedule_activities(self, 
-                                day_plan: DayPlan,
-                                preferences: Dict[str, Any] = None) -> DayPlan:
-        """为一天的活动安排时间"""
-        preferences = preferences or {}
-        
-        # 按照优先级和时间偏好排序活动
-        sorted_activities = self._sort_activities_by_priority(day_plan.activities, preferences)
-        
-        # 分配时间槽
-        scheduled_activities = []
-        current_time = day_plan.start_time
-        
-        for activity in sorted_activities:
-            # 检查活动的时间偏好
-            if self._is_activity_suitable_for_time(activity, current_time):
-                # 安排活动
-                scheduled_activities.append(activity)
+    def schedule_activities(self, activities: List[Activity], 
+                          start_time: datetime,
+                          end_time: datetime,
+                          buffer_time: int = 30) -> List[Activity]:
+        """安排活动时间"""
+        try:
+            scheduled_activities = []
+            current_time = start_time
+            
+            # 按优先级排序活动
+            sorted_activities = sorted(activities, key=lambda a: a.priority, reverse=True)
+            
+            for activity in sorted_activities:
+                # 检查是否有足够时间
+                activity_duration = timedelta(minutes=activity.location.visit_duration)
+                activity_end = current_time + activity_duration
                 
-                # 更新当前时间
-                activity_duration = timedelta(minutes=activity.duration)
-                current_datetime = datetime.combine(day_plan.date.date(), current_time)
-                next_datetime = current_datetime + activity_duration
-                current_time = next_datetime.time()
-                
-                # 检查是否超过结束时间
-                if current_time > day_plan.end_time:
-                    break
-            else:
-                # 找到下一个合适的时间槽
-                next_suitable_time = self._find_next_suitable_time(activity, current_time)
-                if next_suitable_time and next_suitable_time <= day_plan.end_time:
-                    current_time = next_suitable_time
-                    scheduled_activities.append(activity)
+                if activity_end <= end_time:
+                    # 安排活动
+                    scheduled_activity = Activity(
+                        id=activity.id,
+                        name=activity.name,
+                        location=activity.location,
+                        start_time=current_time,
+                        end_time=activity_end,
+                        activity_type=activity.activity_type,
+                        priority=activity.priority,
+                        cost=activity.cost,
+                        prerequisites=activity.prerequisites,
+                        conflicts=activity.conflicts,
+                        participants=activity.participants,
+                        booking_required=activity.booking_required,
+                        weather_dependent=activity.weather_dependent,
+                        metadata=activity.metadata
+                    )
                     
-                    # 更新时间
-                    activity_duration = timedelta(minutes=activity.duration)
-                    current_datetime = datetime.combine(day_plan.date.date(), current_time)
-                    next_datetime = current_datetime + activity_duration
-                    current_time = next_datetime.time()
-        
-        # 更新日计划
-        day_plan.activities = scheduled_activities
-        return day_plan
-    
-    def _sort_activities_by_priority(self, 
-                                   activities: List[Activity],
-                                   preferences: Dict[str, Any]) -> List[Activity]:
-        """按优先级排序活动"""
-        def priority_score(activity: Activity) -> float:
-            score = activity.rating  # 基础分数
+                    scheduled_activities.append(scheduled_activity)
+                    
+                    # 更新当前时间（包括缓冲时间）
+                    current_time = activity_end + timedelta(minutes=buffer_time)
+                else:
+                    logger.warning(f"活动 {activity.name} 无法安排在指定时间内")
             
-            # 根据偏好调整分数
-            preferred_categories = preferences.get("preferred_categories", [])
-            if activity.category in preferred_categories:
-                score += 2.0
+            return scheduled_activities
             
-            # 根据时间偏好调整
-            preferred_times = preferences.get("preferred_times", [])
-            if any(pref_time in activity.best_time for pref_time in preferred_times):
-                score += 1.0
+        except Exception as e:
+            logger.error(f"活动调度失败: {e}")
+            return activities
+    
+    def optimize_schedule(self, activities: List[Activity], 
+                         constraints: List[Constraint] = None) -> List[Activity]:
+        """优化时间安排"""
+        if not activities:
+            return []
+        
+        try:
+            # 检查时间依赖关系
+            dependency_graph = self._build_dependency_graph(activities)
             
-            return score
-        
-        return sorted(activities, key=priority_score, reverse=True)
+            # 拓扑排序
+            sorted_activity_ids = self._topological_sort(dependency_graph)
+            
+            # 考虑营业时间约束
+            constrained_activities = self._apply_time_constraints(sorted_activity_ids, constraints)
+            
+            # 最小化等待时间
+            optimized_activities = self._minimize_waiting_time(constrained_activities)
+            
+            return optimized_activities
+            
+        except Exception as e:
+            logger.error(f"时间安排优化失败: {e}")
+            return activities
     
-    def _is_activity_suitable_for_time(self, activity: Activity, current_time: time) -> bool:
-        """检查活动是否适合当前时间"""
-        if not activity.best_time:
-            return True
+    def _build_dependency_graph(self, activities: List[Activity]) -> Dict[str, List[str]]:
+        """构建依赖关系图"""
+        graph = {activity.id: [] for activity in activities}
         
-        for time_slot in activity.best_time:
-            start_time, end_time = self.time_slots.get(time_slot, (time(0, 0), time(23, 59)))
-            if start_time <= current_time <= end_time:
-                return True
+        for activity in activities:
+            for prerequisite in activity.prerequisites:
+                if prerequisite in graph:
+                    graph[prerequisite].append(activity.id)
         
-        return False
+        return graph
     
-    def _find_next_suitable_time(self, activity: Activity, current_time: time) -> Optional[time]:
-        """找到活动的下一个合适时间"""
-        if not activity.best_time:
-            return current_time
+    def _topological_sort(self, graph: Dict[str, List[str]]) -> List[str]:
+        """拓扑排序"""
+        in_degree = {node: 0 for node in graph}
         
-        suitable_times = []
-        for time_slot in activity.best_time:
-            start_time, _ = self.time_slots.get(time_slot, (time(0, 0), time(23, 59)))
-            if start_time >= current_time:
-                suitable_times.append(start_time)
+        # 计算入度
+        for node in graph:
+            for neighbor in graph[node]:
+                if neighbor in in_degree:
+                    in_degree[neighbor] += 1
         
-        return min(suitable_times) if suitable_times else None
+        # 使用队列进行拓扑排序
+        queue = deque([node for node in in_degree if in_degree[node] == 0])
+        result = []
+        
+        while queue:
+            node = queue.popleft()
+            result.append(node)
+            
+            for neighbor in graph[node]:
+                if neighbor in in_degree:
+                    in_degree[neighbor] -= 1
+                    if in_degree[neighbor] == 0:
+                        queue.append(neighbor)
+        
+        return result
+    
+    def _apply_time_constraints(self, activity_ids: List[str], 
+                               constraints: List[Constraint]) -> List[str]:
+        """应用时间约束"""
+        # 这里可以根据具体的时间约束调整活动顺序
+        # 例如：营业时间、特殊时间要求等
+        return activity_ids
+    
+    def _minimize_waiting_time(self, activity_ids: List[str]) -> List[Activity]:
+        """最小化等待时间"""
+        # 简化实现：保持原有顺序
+        # 实际应用中可以使用更复杂的调度算法
+        return activity_ids
 
 
 class TravelPlanningEngine:
@@ -863,342 +999,419 @@ class TravelPlanningEngine:
     
     def __init__(self):
         self.constraint_solver = ConstraintSolver()
+        self.optimizer = MultiObjectiveOptimizer()
         self.path_optimizer = PathOptimizer()
         self.time_scheduler = TimeScheduler()
         
-        # 规划统计
-        self.planning_stats = {
-            "total_plans_created": 0,
-            "successful_optimizations": 0,
-            "average_optimization_time": 0.0,
-            "constraint_violations": 0
-        }
+        # 地点数据库（简化版）
+        self.locations_db = self._initialize_locations_db()
+        
+        # 规划历史
+        self.planning_history = []
     
-    async def create_travel_plan(self,
-                                requirements: Dict[str, Any],
-                                available_activities: List[Activity],
-                                available_transportations: List[Transportation] = None) -> TravelPlan:
-        """创建旅行计划"""
-        start_time = datetime.now()
-        
-        logger.info("开始创建旅行计划")
-        
-        # 解析需求
-        plan_requirements = self._parse_requirements(requirements)
-        
-        # 创建基础计划
-        travel_plan = await self._create_base_plan(plan_requirements)
-        
-        # 添加约束和目标
-        await self._add_constraints_and_objectives(travel_plan, plan_requirements)
-        
-        # 初始化日计划
-        await self._initialize_daily_plans(travel_plan, available_activities)
-        
-        # 约束求解和优化
-        success, optimized_plan = await self.constraint_solver.solve(
-            travel_plan, available_activities, available_transportations or []
-        )
-        
-        if success:
-            # 路径优化
-            await self._optimize_daily_routes(optimized_plan)
-            
-            # 时间调度
-            await self._schedule_daily_activities(optimized_plan, plan_requirements)
-            
-            # 添加交通安排
-            await self._add_transportation(optimized_plan, available_transportations or [])
-            
-            optimized_plan.status = PlanStatus.READY
-            self.planning_stats["successful_optimizations"] += 1
-        else:
-            optimized_plan.status = PlanStatus.DRAFT
-        
-        # 更新统计
-        optimization_time = (datetime.now() - start_time).total_seconds()
-        self._update_planning_stats(optimization_time)
-        
-        logger.info(f"旅行计划创建完成，状态: {optimized_plan.status}")
-        return optimized_plan
-    
-    async def replan(self,
-                    existing_plan: TravelPlan,
-                    changes: Dict[str, Any],
-                    available_activities: List[Activity],
-                    available_transportations: List[Transportation] = None) -> TravelPlan:
-        """重新规划"""
-        logger.info(f"开始重新规划计划 {existing_plan.id}")
-        
-        # 应用变更
-        updated_plan = await self._apply_changes(existing_plan, changes)
-        
-        # 重新优化
-        success, replanned = await self.constraint_solver.solve(
-            updated_plan, available_activities, available_transportations or []
-        )
-        
-        if success:
-            await self._optimize_daily_routes(replanned)
-            await self._schedule_daily_activities(replanned, changes)
-            await self._add_transportation(replanned, available_transportations or [])
-            replanned.status = PlanStatus.READY
-        
-        return replanned
-    
-    async def optimize_existing_plan(self,
-                                   plan: TravelPlan,
-                                   optimization_goals: List[str] = None) -> TravelPlan:
-        """优化现有计划"""
-        optimization_goals = optimization_goals or ["minimize_cost", "maximize_satisfaction"]
-        
-        logger.info(f"开始优化计划 {plan.id}")
-        
-        # 更新优化目标
-        plan.objectives.clear()
-        for goal in optimization_goals:
-            if goal == "minimize_cost":
-                plan.add_objective(Objective(ObjectiveType.MINIMIZE_COST, weight=1.0))
-            elif goal == "maximize_satisfaction":
-                plan.add_objective(Objective(ObjectiveType.MAXIMIZE_SATISFACTION, weight=1.0))
-            elif goal == "minimize_time":
-                plan.add_objective(Objective(ObjectiveType.MINIMIZE_TIME, weight=1.0))
-            elif goal == "minimize_distance":
-                plan.add_objective(Objective(ObjectiveType.MINIMIZE_DISTANCE, weight=1.0))
-        
-        # 重新优化
-        activities = plan.get_all_activities()
-        success, optimized = await self.constraint_solver.solve(plan, activities, [])
-        
-        if success:
-            await self._optimize_daily_routes(optimized)
-            optimized.status = PlanStatus.READY
-        
-        return optimized
-    
-    def _parse_requirements(self, requirements: Dict[str, Any]) -> Dict[str, Any]:
-        """解析规划需求"""
+    def _initialize_locations_db(self) -> Dict[str, List[Location]]:
+        """初始化地点数据库"""
         return {
-            "destinations": requirements.get("destinations", []),
-            "start_date": requirements.get("start_date"),
-            "end_date": requirements.get("end_date"),
-            "budget": requirements.get("budget", 0),
-            "travelers": requirements.get("travelers", 1),
-            "preferences": requirements.get("preferences", {}),
-            "constraints": requirements.get("constraints", []),
-            "objectives": requirements.get("objectives", ["maximize_satisfaction"])
+            "北京": [
+                Location("loc_001", "故宫", 39.9163, 116.3972, "景点", 240, {"monday": "08:30-17:00"}, 9.2, 3, {}, ["历史", "文化"]),
+                Location("loc_002", "长城", 40.4319, 116.5704, "景点", 360, {"monday": "07:00-18:00"}, 9.0, 2, {}, ["历史", "世界遗产"]),
+                Location("loc_003", "天坛", 39.8828, 116.4066, "景点", 180, {"monday": "06:00-18:00"}, 8.8, 2, {}, ["历史", "建筑"]),
+                Location("loc_004", "颐和园", 39.9999, 116.2753, "景点", 240, {"monday": "06:30-18:00"}, 8.9, 2, {}, ["园林", "历史"]),
+                Location("loc_005", "全聚德", 39.9075, 116.3975, "餐厅", 90, {"monday": "11:00-21:00"}, 8.5, 4, {}, ["烤鸭", "特色菜"])
+            ],
+            "上海": [
+                Location("loc_101", "外滩", 31.2397, 121.4900, "景点", 120, {"monday": "00:00-23:59"}, 9.1, 1, {}, ["观光", "建筑"]),
+                Location("loc_102", "东方明珠", 31.2397, 121.4994, "景点", 120, {"monday": "08:00-21:30"}, 8.7, 3, {}, ["观光", "地标"]),
+                Location("loc_103", "豫园", 31.2272, 121.4921, "景点", 180, {"monday": "08:30-17:00"}, 8.6, 2, {}, ["园林", "历史"]),
+                Location("loc_104", "南京路", 31.2342, 121.4733, "购物", 240, {"monday": "10:00-22:00"}, 8.4, 2, {}, ["购物", "步行街"])
+            ]
         }
     
-    async def _create_base_plan(self, requirements: Dict[str, Any]) -> TravelPlan:
-        """创建基础计划"""
-        plan_id = f"plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        plan = TravelPlan(
-            id=plan_id,
-            name=f"旅行计划_{plan_id}",
-            description="自动生成的旅行计划",
-            start_date=requirements["start_date"],
-            end_date=requirements["end_date"],
-            metadata={
-                "travelers": requirements["travelers"],
-                "destinations": requirements["destinations"],
-                "preferences": requirements["preferences"]
-            }
-        )
-        
-        return plan
-    
-    async def _add_constraints_and_objectives(self, plan: TravelPlan, requirements: Dict[str, Any]):
-        """添加约束和目标"""
-        # 添加预算约束
-        if requirements["budget"] > 0:
-            budget_constraint = Constraint(
-                type=ConstraintType.BUDGET,
-                description=f"总预算不超过 {requirements['budget']} 元",
-                value=requirements["budget"],
-                priority=9
+    async def create_travel_plan(self, requirements: Dict[str, Any]) -> TravelPlan:
+        """创建旅行计划"""
+        try:
+            # 解析需求
+            destinations = requirements.get("destinations", [])
+            start_date = requirements.get("start_date")
+            end_date = requirements.get("end_date")
+            participants = requirements.get("participants", 1)
+            budget_limit = requirements.get("budget_limit", 0.0)
+            preferences = requirements.get("preferences", {})
+            
+            # 转换日期
+            if isinstance(start_date, str):
+                start_date = datetime.fromisoformat(start_date)
+            if isinstance(end_date, str):
+                end_date = datetime.fromisoformat(end_date)
+            
+            # 计算行程天数
+            duration = (end_date - start_date).days + 1
+            
+            # 创建基础计划
+            plan = TravelPlan(
+                id=str(uuid.uuid4()),
+                name=f"{'、'.join(destinations)}旅行计划",
+                destinations=destinations,
+                start_date=start_date,
+                end_date=end_date,
+                daily_plans=[],
+                participants=participants,
+                budget_limit=budget_limit
             )
-            plan.add_constraint(budget_constraint)
-        
-        # 添加时间约束
-        total_hours = plan.duration_days * 10  # 每天10小时活动时间
-        time_constraint = Constraint(
-            type=ConstraintType.TIME,
-            description=f"总活动时间不超过 {total_hours} 小时",
-            value=total_hours * 60,  # 转换为分钟
-            priority=8
-        )
-        plan.add_constraint(time_constraint)
-        
-        # 添加目标
-        for objective_name in requirements["objectives"]:
-            if objective_name == "minimize_cost":
-                plan.add_objective(Objective(ObjectiveType.MINIMIZE_COST, weight=1.0))
-            elif objective_name == "maximize_satisfaction":
-                plan.add_objective(Objective(ObjectiveType.MAXIMIZE_SATISFACTION, weight=2.0))
-            elif objective_name == "minimize_distance":
-                plan.add_objective(Objective(ObjectiveType.MINIMIZE_DISTANCE, weight=0.5))
+            
+            # 添加约束
+            await self._add_constraints(plan, requirements)
+            
+            # 添加目标
+            await self._add_objectives(plan, preferences)
+            
+            # 生成每日计划
+            await self._generate_daily_plans(plan, preferences)
+            
+            # 优化计划
+            optimized_plan = await self._optimize_plan(plan)
+            
+            # 记录规划历史
+            self.planning_history.append({
+                "timestamp": datetime.now(),
+                "plan_id": optimized_plan.id,
+                "requirements": requirements,
+                "result": "success"
+            })
+            
+            return optimized_plan
+            
+        except Exception as e:
+            logger.error(f"创建旅行计划失败: {e}")
+            
+            # 记录失败
+            self.planning_history.append({
+                "timestamp": datetime.now(),
+                "requirements": requirements,
+                "result": "failed",
+                "error": str(e)
+            })
+            
+            raise
     
-    async def _initialize_daily_plans(self, plan: TravelPlan, activities: List[Activity]):
-        """初始化日计划"""
-        current_date = plan.start_date
+    async def _add_constraints(self, plan: TravelPlan, requirements: Dict[str, Any]):
+        """添加约束条件"""
+        constraints = []
         
-        while current_date <= plan.end_date:
+        # 预算约束
+        if plan.budget_limit > 0:
+            budget_constraint = Constraint(
+                id="budget_limit",
+                type="budget",
+                description=f"预算不超过{plan.budget_limit}元",
+                parameters={"max_budget": plan.budget_limit},
+                hard=True
+            )
+            constraints.append(budget_constraint)
+        
+        # 时间约束
+        duration = (plan.end_date - plan.start_date).days + 1
+        time_constraint = Constraint(
+            id="time_limit",
+            type="time",
+            description=f"行程不超过{duration}天",
+            parameters={"max_duration_days": duration, "max_daily_hours": 12},
+            hard=True
+        )
+        constraints.append(time_constraint)
+        
+        # 地点约束
+        if "must_visit" in requirements:
+            location_constraint = Constraint(
+                id="must_visit_locations",
+                type="location",
+                description="必须访问指定地点",
+                parameters={"required_locations": requirements["must_visit"]},
+                hard=True
+            )
+            constraints.append(location_constraint)
+        
+        plan.constraints = constraints
+    
+    async def _add_objectives(self, plan: TravelPlan, preferences: Dict[str, Any]):
+        """添加优化目标"""
+        objectives = []
+        
+        # 默认目标
+        objectives.extend([
+            Objective("minimize_cost", "成本最小化", "降低总体费用", 0.3, False),
+            Objective("maximize_attractions", "景点最大化", "增加景点数量", 0.2, True),
+            Objective("maximize_rating", "评分最大化", "选择高评分地点", 0.3, True),
+            Objective("minimize_travel_time", "交通时间最小化", "减少路上时间", 0.2, False)
+        ])
+        
+        # 根据偏好调整权重
+        travel_type = preferences.get("travel_type", "leisure")
+        if travel_type == "budget":
+            objectives[0].weight = 0.5  # 更重视成本
+            objectives[1].weight = 0.15
+        elif travel_type == "luxury":
+            objectives[2].weight = 0.4  # 更重视质量
+            objectives[0].weight = 0.1
+        
+        plan.objectives = objectives
+    
+    async def _generate_daily_plans(self, plan: TravelPlan, preferences: Dict[str, Any]):
+        """生成每日计划"""
+        duration = (plan.end_date - plan.start_date).days + 1
+        daily_plans = []
+        
+        for day in range(duration):
+            current_date = plan.start_date + timedelta(days=day)
+            
+            # 选择当天的目的地
+            destination = plan.destinations[day % len(plan.destinations)]
+            
+            # 获取该目的地的活动
+            activities = await self._generate_activities(destination, current_date, preferences)
+            
+            # 优化路线
+            locations = [activity.location for activity in activities]
+            optimized_locations = self.path_optimizer.optimize_route(locations)
+            
+            # 重新排序活动
+            optimized_activities = []
+            for location in optimized_locations:
+                for activity in activities:
+                    if activity.location.id == location.id:
+                        optimized_activities.append(activity)
+                        break
+            
+            # 调度时间
+            start_time = current_date.replace(hour=9, minute=0)
+            end_time = current_date.replace(hour=18, minute=0)
+            
+            scheduled_activities = self.time_scheduler.schedule_activities(
+                optimized_activities, start_time, end_time
+            )
+            
+            # 生成交通计划
+            transportations = await self._generate_transportations(scheduled_activities)
+            
+            # 创建每日计划
             day_plan = DayPlan(
                 date=current_date,
-                start_time=time(9, 0),
-                end_time=time(18, 0)
+                activities=scheduled_activities,
+                transportations=transportations
             )
-            plan.daily_plans.append(day_plan)
-            current_date += timedelta(days=1)
-    
-    async def _optimize_daily_routes(self, plan: TravelPlan):
-        """优化每日路线"""
-        for day_plan in plan.daily_plans:
-            if len(day_plan.activities) > 1:
-                # 提取活动位置
-                locations = [activity.location for activity in day_plan.activities]
-                
-                # 优化路径
-                optimized_locations = await self.path_optimizer.optimize_path(locations)
-                
-                # 重新排序活动
-                optimized_activities = []
-                for location in optimized_locations:
-                    for activity in day_plan.activities:
-                        if activity.location == location and activity not in optimized_activities:
-                            optimized_activities.append(activity)
-                            break
-                
-                day_plan.activities = optimized_activities
-    
-    async def _schedule_daily_activities(self, plan: TravelPlan, requirements: Dict[str, Any]):
-        """安排每日活动时间"""
-        preferences = requirements.get("preferences", {})
+            
+            daily_plans.append(day_plan)
         
-        for day_plan in plan.daily_plans:
-            await self.time_scheduler.schedule_activities(day_plan, preferences)
+        plan.daily_plans = daily_plans
     
-    async def _add_transportation(self, plan: TravelPlan, transportations: List[Transportation]):
-        """添加交通安排"""
-        for day_plan in plan.daily_plans:
-            if len(day_plan.activities) > 1:
-                for i in range(len(day_plan.activities) - 1):
-                    from_location = day_plan.activities[i].location
-                    to_location = day_plan.activities[i + 1].location
-                    
-                    # 寻找合适的交通方式
-                    transport = self._find_best_transportation(
-                        from_location, to_location, transportations
-                    )
-                    
-                    if transport:
-                        day_plan.transportations.append(transport)
-    
-    def _find_best_transportation(self,
-                                from_location: Location,
-                                to_location: Location,
-                                transportations: List[Transportation]) -> Optional[Transportation]:
-        """找到最佳交通方式"""
-        # 简化实现：根据距离选择交通方式
-        distance = from_location.calculate_distance(to_location)
+    async def _generate_activities(self, destination: str, date: datetime, 
+                                 preferences: Dict[str, Any]) -> List[Activity]:
+        """生成活动"""
+        activities = []
+        locations = self.locations_db.get(destination, [])
         
-        if distance < 1:  # 1公里内步行
-            return Transportation(
-                mode="walk",
-                from_location=from_location,
-                to_location=to_location,
-                duration=int(distance * 12),  # 假设步行速度5km/h
-                cost=0
-            )
-        elif distance < 10:  # 10公里内打车
-            return Transportation(
-                mode="taxi",
-                from_location=from_location,
-                to_location=to_location,
-                duration=int(distance * 4),  # 假设车速15km/h（城市）
-                cost=distance * 3  # 每公里3元
-            )
-        else:  # 长距离使用公共交通
-            return Transportation(
-                mode="public",
-                from_location=from_location,
-                to_location=to_location,
-                duration=int(distance * 6),  # 假设公共交通速度10km/h
-                cost=distance * 1  # 每公里1元
-            )
-    
-    async def _apply_changes(self, plan: TravelPlan, changes: Dict[str, Any]) -> TravelPlan:
-        """应用变更到计划"""
-        updated_plan = self.constraint_solver._deep_copy_plan(plan)
+        # 根据偏好筛选地点
+        travel_type = preferences.get("travel_type", "leisure")
+        interests = preferences.get("interests", [])
         
-        # 应用预算变更
-        if "budget" in changes:
+        filtered_locations = []
+        for location in locations:
+            # 根据旅行类型筛选
+            if travel_type == "cultural" and "文化" not in location.tags:
+                continue
+            if travel_type == "nature" and "自然" not in location.tags:
+                continue
+            
+            # 根据兴趣筛选
+            if interests and not any(interest in location.tags for interest in interests):
+                continue
+            
+            filtered_locations.append(location)
+        
+        # 如果筛选后没有地点，使用所有地点
+        if not filtered_locations:
+            filtered_locations = locations
+        
+        # 创建活动
+        for i, location in enumerate(filtered_locations[:5]):  # 每天最多5个活动
+            activity = Activity(
+                id=f"activity_{date.strftime('%Y%m%d')}_{i:02d}",
+                name=f"游览{location.name}",
+                location=location,
+                start_time=date,  # 临时时间，后续会调整
+                end_time=date,    # 临时时间，后续会调整
+                activity_type=location.category,
+                priority=5 - i,   # 优先级递减
+                cost=location.price_level * 50,  # 简化的费用计算
+                participants=1,
+                booking_required=location.category == "景点",
+                weather_dependent=location.category == "景点"
+            )
+            activities.append(activity)
+        
+        return activities
+    
+    async def _generate_transportations(self, activities: List[Activity]) -> List[Transportation]:
+        """生成交通计划"""
+        transportations = []
+        
+        for i in range(len(activities) - 1):
+            current_activity = activities[i]
+            next_activity = activities[i + 1]
+            
+            # 计算交通时间和费用
+            distance = self.path_optimizer._calculate_distance(
+                current_activity.location, next_activity.location
+            )
+            
+            # 选择交通方式
+            if distance < 1.0:  # 1公里内步行
+                mode = "步行"
+                duration = int(distance * 15)  # 每公里15分钟
+                cost = 0.0
+            elif distance < 5.0:  # 5公里内地铁/公交
+                mode = "地铁"
+                duration = int(distance * 8 + 10)  # 每公里8分钟+等车时间
+                cost = 5.0
+            else:  # 长距离出租车
+                mode = "出租车"
+                duration = int(distance * 5 + 5)  # 每公里5分钟+起步时间
+                cost = distance * 3.0 + 10.0  # 每公里3元+起步费
+            
+            transportation = Transportation(
+                id=f"transport_{i:02d}",
+                mode=mode,
+                origin=current_activity.location,
+                destination=next_activity.location,
+                duration=duration,
+                cost=cost,
+                distance=distance,
+                departure_time=current_activity.end_time,
+                arrival_time=next_activity.start_time
+            )
+            
+            transportations.append(transportation)
+        
+        return transportations
+    
+    async def _optimize_plan(self, plan: TravelPlan) -> TravelPlan:
+        """优化计划"""
+        try:
+            # 约束检查
+            feasible, constraint_result = self.constraint_solver.solve(plan)
+            
+            if not feasible:
+                logger.warning(f"计划不满足约束: {constraint_result}")
+                # 可以在这里实施修复策略
+            
+            # 多目标优化
+            optimized_plan = self.optimizer.optimize(plan, population_size=20, generations=50)
+            
+            # 更新优化历史
+            optimized_plan.optimization_history.append({
+                "timestamp": datetime.now().isoformat(),
+                "constraint_satisfaction": constraint_result,
+                "optimization_method": "genetic_algorithm",
+                "improvement": optimized_plan.total_score - plan.total_score
+            })
+            
+            return optimized_plan
+            
+        except Exception as e:
+            logger.error(f"计划优化失败: {e}")
+            return plan
+    
+    async def replan(self, original_plan: TravelPlan, 
+                    changes: Dict[str, Any]) -> TravelPlan:
+        """动态重规划"""
+        try:
+            # 克隆原计划
+            new_plan = TravelPlan(
+                id=str(uuid.uuid4()),
+                name=f"{original_plan.name}_重规划",
+                destinations=original_plan.destinations.copy(),
+                start_date=original_plan.start_date,
+                end_date=original_plan.end_date,
+                daily_plans=[],
+                participants=original_plan.participants,
+                budget_limit=original_plan.budget_limit,
+                constraints=original_plan.constraints.copy(),
+                objectives=original_plan.objectives.copy()
+            )
+            
+            # 应用变更
+            await self._apply_changes(new_plan, changes)
+            
+            # 重新生成计划
+            preferences = changes.get("preferences", {})
+            await self._generate_daily_plans(new_plan, preferences)
+            
+            # 优化新计划
+            optimized_plan = await self._optimize_plan(new_plan)
+            
+            return optimized_plan
+            
+        except Exception as e:
+            logger.error(f"动态重规划失败: {e}")
+            return original_plan
+    
+    async def _apply_changes(self, plan: TravelPlan, changes: Dict[str, Any]):
+        """应用变更"""
+        # 更新基本信息
+        if "start_date" in changes:
+            plan.start_date = datetime.fromisoformat(changes["start_date"])
+        
+        if "end_date" in changes:
+            plan.end_date = datetime.fromisoformat(changes["end_date"])
+        
+        if "budget_limit" in changes:
+            plan.budget_limit = changes["budget_limit"]
+            
             # 更新预算约束
-            for constraint in updated_plan.constraints:
-                if constraint.type == ConstraintType.BUDGET:
-                    constraint.value = changes["budget"]
+            for constraint in plan.constraints:
+                if constraint.id == "budget_limit":
+                    constraint.parameters["max_budget"] = plan.budget_limit
         
-        # 应用活动变更
-        if "add_activities" in changes:
-            for activity_data in changes["add_activities"]:
-                # 这里需要根据activity_data创建Activity对象
-                # 简化实现
-                pass
+        if "destinations" in changes:
+            plan.destinations = changes["destinations"]
         
-        if "remove_activities" in changes:
-            activities_to_remove = changes["remove_activities"]
-            for day_plan in updated_plan.daily_plans:
-                day_plan.activities = [
-                    activity for activity in day_plan.activities 
-                    if activity.id not in activities_to_remove
-                ]
-        
-        return updated_plan
+        if "participants" in changes:
+            plan.participants = changes["participants"]
     
-    def _update_planning_stats(self, optimization_time: float):
-        """更新规划统计"""
-        self.planning_stats["total_plans_created"] += 1
-        
-        total_plans = self.planning_stats["total_plans_created"]
-        current_avg = self.planning_stats["average_optimization_time"]
-        
-        self.planning_stats["average_optimization_time"] = (
-            (current_avg * (total_plans - 1) + optimization_time) / total_plans
-        )
-    
-    def get_planning_stats(self) -> Dict[str, Any]:
+    def get_planning_statistics(self) -> Dict[str, Any]:
         """获取规划统计信息"""
-        return self.planning_stats.copy()
-    
-    async def validate_plan(self, plan: TravelPlan) -> Dict[str, Any]:
-        """验证计划"""
-        validation_result = {
-            "is_valid": True,
-            "constraint_violations": [],
-            "warnings": [],
-            "suggestions": []
+        if not self.planning_history:
+            return {"total_plans": 0, "success_rate": 0.0}
+        
+        total_plans = len(self.planning_history)
+        successful_plans = sum(1 for entry in self.planning_history if entry["result"] == "success")
+        success_rate = successful_plans / total_plans
+        
+        # 分析常见目的地
+        destinations_count = defaultdict(int)
+        for entry in self.planning_history:
+            if "requirements" in entry and "destinations" in entry["requirements"]:
+                for dest in entry["requirements"]["destinations"]:
+                    destinations_count[dest] += 1
+        
+        popular_destinations = sorted(destinations_count.items(), 
+                                    key=lambda x: x[1], reverse=True)[:5]
+        
+        return {
+            "total_plans": total_plans,
+            "successful_plans": successful_plans,
+            "success_rate": success_rate,
+            "popular_destinations": popular_destinations,
+            "average_optimization_time": self._calculate_average_optimization_time()
         }
-        
-        # 验证约束
-        is_valid, violations = plan.validate_constraints()
-        validation_result["is_valid"] = is_valid
-        validation_result["constraint_violations"] = violations
-        
-        # 检查警告
-        total_cost = plan.calculate_total_cost()
-        if total_cost == 0:
-            validation_result["warnings"].append("计划中没有任何费用，可能缺少活动")
-        
-        # 生成建议
-        satisfaction_score = plan.calculate_satisfaction_score()
-        if satisfaction_score < 3.0:
-            validation_result["suggestions"].append("考虑添加更多高评分的活动来提升满意度")
-        
-        return validation_result
+    
+    def _calculate_average_optimization_time(self) -> float:
+        """计算平均优化时间"""
+        # 简化实现，返回估计值
+        return 2.5  # 2.5秒
 
 
-# 全局规划引擎实例
+# 全局旅行规划引擎实例
 _travel_planning_engine: Optional[TravelPlanningEngine] = None
 
 

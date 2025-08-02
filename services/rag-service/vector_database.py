@@ -116,51 +116,100 @@ class VectorDatabasePool:
     
     def record_request(self, node_id: str, response_time: float, success: bool) -> None:
         """记录请求统计"""
-        stats = self.connection_stats[node_id]
-        stats["requests"] += 1
-        stats["last_used"] = datetime.now()
-        stats["response_times"].append(response_time)
-        
-        if not success:
-            stats["errors"] += 1
-        
-        # 保持最近100次响应时间
-        if len(stats["response_times"]) > 100:
-            stats["response_times"] = stats["response_times"][-100:]
-    
-    def get_best_node(self) -> str:
-        """获取最佳节点"""
-        best_node = None
-        best_score = float('inf')
-        
-        for node_id, stats in self.connection_stats.items():
-            if stats["requests"] == 0:
-                return node_id  # 优先使用未使用的节点
+        if node_id in self.connection_stats:
+            stats = self.connection_stats[node_id]
+            stats["requests"] += 1
+            if not success:
+                stats["errors"] += 1
+            stats["last_used"] = datetime.now()
+            stats["response_times"].append(response_time)
             
-            # 计算综合分数（错误率 + 平均响应时间）
-            error_rate = stats["errors"] / stats["requests"]
-            avg_response_time = np.mean(stats["response_times"]) if stats["response_times"] else 0
-            score = error_rate * 1000 + avg_response_time  # 错误率权重更高
-            
-            if score < best_score:
-                best_score = score
-                best_node = node_id
-        
-        return best_node or "node_0"
+            # 保持响应时间历史记录在合理范围内
+            if len(stats["response_times"]) > 100:
+                stats["response_times"] = stats["response_times"][-50:]
     
-    async def health_check(self) -> Dict[str, bool]:
-        """健康检查"""
-        health_status = {}
+    def get_best_node(self, strategy: str = "least_connections") -> str:
+        """根据策略选择最佳节点"""
+        if strategy == "round_robin":
+            # 轮询策略
+            node_id = f"node_{self.current_node_index}"
+            self.current_node_index = (self.current_node_index + 1) % len(self.nodes)
+            return node_id
+        
+        elif strategy == "least_connections":
+            # 最少连接策略
+            best_node = None
+            min_requests = float('inf')
+            
+            for node_id, stats in self.connection_stats.items():
+                if stats["requests"] < min_requests:
+                    min_requests = stats["requests"]
+                    best_node = node_id
+            
+            return best_node or "node_0"
+        
+        elif strategy == "weighted_round_robin":
+            # 加权轮询策略 - 基于历史响应时间
+            best_node = None
+            best_score = float('inf')
+            
+            for node_id, stats in self.connection_stats.items():
+                response_times = stats["response_times"]
+                avg_response_time = sum(response_times) / len(response_times) if response_times else 1.0
+                error_rate = stats["errors"] / max(stats["requests"], 1)
+                
+                # 综合评分：响应时间 + 错误率权重
+                score = avg_response_time * (1 + error_rate * 2)
+                
+                if score < best_score:
+                    best_score = score
+                    best_node = node_id
+            
+            return best_node or "node_0"
+        
+        else:
+            # 默认返回第一个节点
+            return "node_0"
+    
+    async def check_cluster_health(self) -> Dict[str, Any]:
+        """检查集群健康状态"""
+        health_status = {
+            "healthy_nodes": 0,
+            "total_nodes": len(self.nodes),
+            "node_details": {},
+            "cluster_status": "healthy"
+        }
         
         for i, node in enumerate(self.nodes):
             node_id = f"node_{i}"
             try:
                 client = await self.get_client(node_id)
-                await client.get_collections()
-                health_status[node_id] = True
+                # 简单的健康检查
+                start_time = time.time()
+                collections = client.get_collections()
+                response_time = time.time() - start_time
+                
+                health_status["node_details"][node_id] = {
+                    "status": "healthy",
+                    "response_time": response_time,
+                    "collections_count": len(collections.collections)
+                }
+                health_status["healthy_nodes"] += 1
+                
             except Exception as e:
-                logger.error(f"节点 {node_id} 健康检查失败: {e}")
-                health_status[node_id] = False
+                health_status["node_details"][node_id] = {
+                    "status": "unhealthy",
+                    "error": str(e)
+                }
+        
+        # 确定集群状态
+        healthy_ratio = health_status["healthy_nodes"] / health_status["total_nodes"]
+        if healthy_ratio == 1.0:
+            health_status["cluster_status"] = "healthy"
+        elif healthy_ratio >= 0.5:
+            health_status["cluster_status"] = "degraded"
+        else:
+            health_status["cluster_status"] = "critical"
         
         return health_status
 
@@ -293,24 +342,24 @@ class VectorDatabase:
         try:
             # 创建payload索引以提高过滤性能
             index_configs = [
-            ("document_type", models.PayloadSchemaType.KEYWORD),
-            ("source", models.PayloadSchemaType.KEYWORD),
+                ("document_type", models.PayloadSchemaType.KEYWORD),
+                ("source", models.PayloadSchemaType.KEYWORD),
                 ("created_at", models.PayloadSchemaType.DATETIME),
-            ("category", models.PayloadSchemaType.KEYWORD),
+                ("category", models.PayloadSchemaType.KEYWORD),
                 ("language", models.PayloadSchemaType.KEYWORD)
-        ]
-        
+            ]
+            
             for field_name, field_type in index_configs:
-            try:
+                try:
                     client.create_payload_index(
-                    collection_name=collection_name,
-                    field_name=field_name,
-                    field_schema=field_type
-                )
+                        collection_name=collection_name,
+                        field_name=field_name,
+                        field_schema=field_type
+                    )
                 except Exception as e:
                     logger.warning(f"创建索引 {field_name} 失败: {e}")
                     
-            except Exception as e:
+        except Exception as e:
             logger.error(f"优化集合失败: {e}")
     
     async def upsert_vectors(self, 

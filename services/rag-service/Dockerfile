@@ -22,10 +22,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 下载必要的模型和数据
 RUN python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')"
 
-# 创建数据目录
-RUN mkdir -p /app/data/logs /app/data/backups /app/data/knowledge_versions
+# 创建数据目录  
+RUN mkdir -p /app/data/knowledge_base /app/data/models /app/data/logs
 
 # 复制应用代码
 COPY services/rag-service/ /app/

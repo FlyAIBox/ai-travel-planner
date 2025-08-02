@@ -150,13 +150,13 @@ class WebSocketManager:
         if user_id not in self.user_connections:
             self.user_connections[user_id] = set()
         self.user_connections[user_id].add(connection_id)
-        
+            
         # 对话连接映射
         if conversation_id:
             if conversation_id not in self.conversation_connections:
                 self.conversation_connections[conversation_id] = set()
             self.conversation_connections[conversation_id].add(connection_id)
-        
+            
         # 记录连接信息到Redis
         await self._save_connection_to_redis(connection)
             

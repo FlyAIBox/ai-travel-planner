@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="AI智能旅行规划助手 - 基于人工智能的个性化旅行规划平台" />
+    <meta name="keywords" content="AI,人工智能,旅行规划,行程推荐,智能助手,travel planning" />
+    <meta name="author" content="AI Travel Planner Team" />
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://ai-travel-planner.com/" />
+    <meta property="og:title" content="AI智能旅行规划助手" />
+    <meta property="og:description" content="基于人工智能的个性化旅行规划平台，为您提供专业的旅行建议和智能行程推荐" />
+    
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:url" content="https://ai-travel-planner.com/" />
+    <meta property="twitter:title" content="AI智能旅行规划助手" />
+    <meta property="twitter:description" content="基于人工智能的个性化旅行规划平台，为您提供专业的旅行建议和智能行程推荐" />
+    
+    <title>AI智能旅行规划助手</title>
+    
+    <!-- 预加载关键资源 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    
+    <!-- 防止FOUC (Flash of Unstyled Content) -->
+    <style>
+      #root {
+        display: none;
+      }
+      
+      /* 加载动画 */
+      .initial-loading {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: #f0f2f5;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+      }
+      
+      .loading-spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #1890ff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      
+      .loading-text {
+        margin-top: 16px;
+        color: #666;
+        font-size: 14px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+      
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    
+    <!-- 初始加载动画 -->
+    <div class="initial-loading">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">正在加载AI旅行助手...</div>
+    </div>
+    
+    <!-- 无JavaScript提示 -->
+    <noscript>
+      <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
+        <h2>JavaScript未启用</h2>
+        <p>请启用JavaScript以使用AI智能旅行规划助手。</p>
+      </div>
+    </noscript>
+    
+    <script type="module" src="/src/main.tsx"></script>
+    
+    <!-- 移除加载动画的脚本 -->
+    <script>
+      window.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+          const loading = document.querySelector('.initial-loading');
+          const root = document.getElementById('root');
+          if (loading && root) {
+            loading.style.display = 'none';
+            root.style.display = 'block';
+          }
+        }, 1000);
+      });
+    </script>
+  </body>
+</html> 

@@ -49,54 +49,80 @@ lxml==5.3.0
 pypdf==5.1.0
 python-multipart==0.0.20
 
+# NLP处理
+nltk==3.9.1
+spacy==3.8.2
+jieba==0.42.1
+zhipuai==2.1.5.20250801
+
+# 图像处理
+Pillow>=10.0.0
+
+# 开发和测试工具
+pytest==8.3.4
+pytest-asyncio==0.25.0
+pytest-cov==6.0.0
+black==24.10.0
+isort==5.13.2
+flake8==7.1.1
+mypy==1.14.0
+
+# 日志和监控
+structlog==24.4.0
+loguru==0.7.3
+prometheus-client==0.21.1
+
 # 配置管理
 python-dotenv==1.0.1
 pyyaml==6.0.2
 toml==0.10.2
 
-# 认证和安全
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+# 安全
 cryptography==44.0.0
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+bcrypt==4.2.1
 
-# 监控和日志
-prometheus-client==0.21.1
-structlog==24.4.0
-loguru==0.7.3
+# 异步HTTP
+aiofiles==24.1.0
+aiolimiter==1.1.0
+
+# API文档
+python-multipart==0.0.20
 
 # 时间处理
-python-dateutil==2.9.0
-pytz==2024.2
+arrow==1.3.0
 
-# 图像处理
-pillow==11.0.0
+# 网络
+slowapi==0.1.9
 
-# 模板引擎
-jinja2==3.1.4
+# JSON处理  
+orjson==3.10.12
 
-# 开发工具
-rich==14.0.0
-typer==0.15.1
+# 工作流
+n8n-sdk==0.1.0
+
+# 其他工具
 click==8.1.8
+rich==13.9.4
+tqdm==4.67.1
 
-# 测试工具
-pytest>=7.4.0
-pytest-cov>=4.1.0
-pytest-asyncio>=0.21.0
-factory-boy==3.3.1
-freezegun==1.5.3
-responses==0.25.3
+# 量化和压缩
+bitsandbytes==0.45.0
 
-# 代码质量
-black>=23.0.0
-isort>=5.12.0
-flake8>=6.0.0
-pre-commit>=3.0.0
+# 模型优化
+optimum==1.23.3
 
-# 类型提示
-mypy==1.14.0
-types-redis==4.6.0.20241004
-types-requests==2.32.4.20250611
+# 文件处理
+openpyxl==3.1.5
+python-docx==1.1.2
 
-# 数据库工具
-mysql-connector-python>=8.0.33
+# 网络爬虫
+scrapy==2.12.0
+
+# 正则表达式
+regex==2024.11.6
+
+# 字符串相似性
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.26.1

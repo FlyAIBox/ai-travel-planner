@@ -7,14 +7,21 @@ import {
   PaperClipOutlined,
   PictureOutlined,
   FileTextOutlined,
-  LoadingOutlined
+  LoadingOutlined,
+  WifiOutlined,
+  DisconnectOutlined
 } from '@ant-design/icons'
 import { motion, AnimatePresence } from 'framer-motion'
-import io, { Socket } from 'socket.io-client'
 import ReactMarkdown from 'react-markdown'
 import dayjs from 'dayjs'
 
 import './ChatWindow.css'
+import { 
+  WebSocketService, 
+  ChatMessage, 
+  ConnectionStatus,
+  createWebSocketService 
+} from './WebSocketService'
 
 // 类型定义
 interface Message {
@@ -28,6 +35,7 @@ interface Message {
     fileSize?: number
     imageUrl?: string
     isStreaming?: boolean
+    conversationId?: string
   }
 }
 
@@ -35,385 +43,392 @@ interface ChatWindowProps {
   conversationId?: string
   onNewConversation?: (conversationId: string) => void
   className?: string
+  userId?: string
+  apiBaseUrl?: string
 }
 
 const ChatWindow: React.FC<ChatWindowProps> = ({
   conversationId,
   onNewConversation,
-  className
+  className,
+  userId = 'user_' + Date.now(),
+  apiBaseUrl = 'ws://localhost:8000'
 }) => {
   // 状态管理
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [isConnected, setIsConnected] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected')
   const [currentStreamingId, setCurrentStreamingId] = useState<string | null>(null)
+  const [isTyping, setIsTyping] = useState(false)
+  const [streamingContent, setStreamingContent] = useState('')
 
-  // 引用
+  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const socketRef = useRef<Socket | null>(null)
   const inputRef = useRef<any>(null)
-
-  // WebSocket连接
-  useEffect(() => {
-    const socket = io('/api/v1/ws', {
-      transports: ['websocket'],
-      query: conversationId ? { conversation_id: conversationId } : {}
-    })
-
-    socketRef.current = socket
-
-    socket.on('connect', () => {
-      setIsConnected(true)
-      console.log('WebSocket连接成功')
-    })
-
-    socket.on('disconnect', () => {
-      setIsConnected(false)
-      console.log('WebSocket连接断开')
-    })
-
-    socket.on('message', (data: any) => {
-      handleReceivedMessage(data)
-    })
-
-    socket.on('message_stream', (data: any) => {
-      handleStreamMessage(data)
-    })
-
-    socket.on('error', (error: any) => {
-      console.error('WebSocket错误:', error)
-      message.error('连接错误，请刷新页面重试')
-    })
-
-    return () => {
-      socket.disconnect()
-    }
-  }, [conversationId])
-
-  // 处理接收到的消息
-  const handleReceivedMessage = useCallback((data: any) => {
-    const newMessage: Message = {
-      id: data.message_id || Date.now().toString(),
-      content: data.content,
-      type: data.type || 'text',
-      sender: 'assistant',
-      timestamp: data.timestamp || new Date().toISOString(),
-      metadata: data.metadata
-    }
-
-    setMessages(prev => [...prev, newMessage])
-    setIsLoading(false)
-    setCurrentStreamingId(null)
-  }, [])
-
-  // 处理流式消息
-  const handleStreamMessage = useCallback((data: any) => {
-    if (data.type === 'start') {
-      const streamMessage: Message = {
-        id: data.message_id,
-        content: '',
-        type: 'text',
-        sender: 'assistant',
-        timestamp: new Date().toISOString(),
-        metadata: { isStreaming: true }
-      }
-      setMessages(prev => [...prev, streamMessage])
-      setCurrentStreamingId(data.message_id)
-      setIsLoading(false)
-    } else if (data.type === 'chunk') {
-      setMessages(prev => prev.map(msg => 
-        msg.id === data.message_id 
-          ? { ...msg, content: msg.content + data.content }
-          : msg
-      ))
-    } else if (data.type === 'end') {
-      setMessages(prev => prev.map(msg => 
-        msg.id === data.message_id 
-          ? { ...msg, metadata: { ...msg.metadata, isStreaming: false } }
-          : msg
-      ))
-      setCurrentStreamingId(null)
-    }
-  }, [])
+  const webSocketService = useRef<WebSocketService | null>(null)
+  const typingTimeoutRef = useRef<number | null>(null)
 
   // 滚动到底部
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }
+  }, [])
 
+  // 初始化WebSocket连接
+  useEffect(() => {
+    const wsUrl = apiBaseUrl.replace('http', 'ws') + '/api/v1/chat/websocket'
+    
+    webSocketService.current = createWebSocketService({
+      url: wsUrl,
+      userId,
+      sessionId: conversationId || 'session_' + Date.now(),
+      reconnectInterval: 3000,
+      maxReconnectAttempts: 5,
+      heartbeatInterval: 30000
+    })
+
+    const ws = webSocketService.current
+
+    // 设置事件监听器
+    ws.on('onConnectionChange', (status: ConnectionStatus) => {
+      setConnectionStatus(status)
+      
+      if (status === 'connected') {
+        message.success('连接已建立')
+      } else if (status === 'disconnected') {
+        message.warning('连接已断开')
+      } else if (status === 'error') {
+        message.error('连接错误')
+      } else if (status === 'reconnecting') {
+        message.info('正在重连...')
+      }
+    })
+
+    ws.on('onMessage', (chatMessage: ChatMessage) => {
+      const newMessage: Message = {
+        id: chatMessage.id,
+        content: chatMessage.content,
+        type: 'text',
+        sender: chatMessage.type === 'user' ? 'user' : 'assistant',
+        timestamp: chatMessage.timestamp,
+        metadata: chatMessage.metadata
+      }
+
+      setMessages(prev => [...prev, newMessage])
+      setIsLoading(false)
+      setCurrentStreamingId(null)
+      setStreamingContent('')
+    })
+
+    ws.on('onTyping', (typing: boolean) => {
+      setIsTyping(typing)
+    })
+
+    ws.on('onStreamStart', () => {
+      const streamId = 'stream_' + Date.now()
+      setCurrentStreamingId(streamId)
+      setStreamingContent('')
+      setIsLoading(false)
+    })
+
+    ws.on('onStreamChunk', (chunk: string) => {
+      setStreamingContent(prev => prev + chunk)
+    })
+
+    ws.on('onStreamEnd', () => {
+      setCurrentStreamingId(null)
+      setStreamingContent('')
+    })
+
+    ws.on('onError', (error: Error) => {
+      console.error('WebSocket错误:', error)
+      message.error('连接错误: ' + error.message)
+      setIsLoading(false)
+    })
+
+    // 建立连接
+    ws.connect().catch(err => {
+      console.error('WebSocket连接失败:', err)
+      message.error('无法连接到服务器')
+    })
+
+    // 清理函数
+    return () => {
+      ws.disconnect()
+    }
+  }, [conversationId, userId, apiBaseUrl])
+
+  // 滚动效果
   useEffect(() => {
     scrollToBottom()
-  }, [messages])
+  }, [messages, streamingContent, scrollToBottom])
 
   // 发送消息
-  const sendMessage = async (content: string, type: 'text' | 'image' | 'file' = 'text', metadata?: any) => {
-    if (!content.trim() && type === 'text') return
-    if (!socketRef.current?.connected) {
-      message.error('连接已断开，请刷新页面重试')
+  const handleSendMessage = useCallback(async () => {
+    if (!inputValue.trim() || !webSocketService.current?.isConnected()) {
+      if (!webSocketService.current?.isConnected()) {
+        message.warning('连接未建立，请稍后重试')
+      }
       return
     }
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      content,
-      type,
-      sender: 'user',
-      timestamp: new Date().toISOString(),
-      metadata
-    }
-
-    setMessages(prev => [...prev, userMessage])
+    const messageContent = inputValue.trim()
     setInputValue('')
     setIsLoading(true)
 
-    // 通过WebSocket发送消息
-    socketRef.current.emit('send_message', {
-      content,
-      type,
-      metadata,
-      conversation_id: conversationId
-    })
-  }
-
-  // 处理键盘事件
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      sendMessage(inputValue)
+    // 添加用户消息到界面
+    const userMessage: Message = {
+      id: 'user_' + Date.now(),
+      content: messageContent,
+      type: 'text',
+      sender: 'user',
+      timestamp: new Date().toISOString()
     }
-  }
-
-  // 文件上传处理
-  const handleFileUpload = async (file: File) => {
-    const formData = new FormData()
-    formData.append('file', file)
+    
+    setMessages(prev => [...prev, userMessage])
 
     try {
-      const response = await fetch('/api/v1/upload', {
-        method: 'POST',
-        body: formData
-      })
-
-      if (response.ok) {
-        const result = await response.json()
-        
-        if (file.type.startsWith('image/')) {
-          sendMessage(result.url, 'image', {
-            fileName: file.name,
-            fileSize: file.size,
-            imageUrl: result.url
-          })
-        } else {
-          sendMessage(file.name, 'file', {
-            fileName: file.name,
-            fileSize: file.size,
-            fileUrl: result.url
-          })
-        }
-      } else {
-        message.error('文件上传失败')
-      }
+      // 通过WebSocket发送消息
+      webSocketService.current.sendMessage(messageContent, 'user')
     } catch (error) {
-      console.error('文件上传错误:', error)
-      message.error('文件上传失败')
+      console.error('发送消息失败:', error)
+      message.error('发送消息失败')
+      setIsLoading(false)
+    }
+  }, [inputValue])
+
+  // 处理输入变化
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputValue(e.target.value)
+    
+    // 发送打字状态
+    if (webSocketService.current?.isConnected()) {
+      webSocketService.current.sendTypingStatus(true)
+      
+      // 清除之前的定时器
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current)
+      }
+      
+      // 设置新的定时器，3秒后停止打字状态
+      typingTimeoutRef.current = window.setTimeout(() => {
+        webSocketService.current?.sendTypingStatus(false)
+      }, 3000)
+    }
+  }, [])
+
+  // 处理回车键
+  const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSendMessage()
+    }
+  }, [handleSendMessage])
+
+  // 重连功能
+  const handleReconnect = useCallback(() => {
+    if (webSocketService.current) {
+      webSocketService.current.connect().catch(err => {
+        console.error('重连失败:', err)
+        message.error('重连失败')
+      })
+    }
+  }, [])
+
+  // 获取连接状态图标
+  const getConnectionIcon = () => {
+    switch (connectionStatus) {
+      case 'connected':
+        return <WifiOutlined style={{ color: '#52c41a' }} />
+      case 'connecting':
+      case 'reconnecting':
+        return <LoadingOutlined style={{ color: '#1890ff' }} />
+      default:
+        return <DisconnectOutlined style={{ color: '#ff4d4f' }} />
     }
   }
 
-  // 渲染消息内容
-  const renderMessageContent = (msg: Message) => {
-    switch (msg.type) {
-      case 'image':
-        return (
-          <div className="message-image">
-            <img 
-              src={msg.metadata?.imageUrl || msg.content} 
-              alt={msg.metadata?.fileName || 'Image'}
-              style={{ maxWidth: '300px', maxHeight: '200px', borderRadius: '8px' }}
-            />
-            {msg.metadata?.fileName && (
-              <div className="image-filename">{msg.metadata.fileName}</div>
-            )}
-          </div>
-        )
-      
-      case 'file':
-        return (
-          <div className="message-file">
-            <FileTextOutlined style={{ fontSize: '24px', color: '#1890ff' }} />
-            <div className="file-info">
-              <div className="file-name">{msg.metadata?.fileName || msg.content}</div>
-              {msg.metadata?.fileSize && (
-                <div className="file-size">
-                  {(msg.metadata.fileSize / 1024).toFixed(1)} KB
-                </div>
-              )}
-            </div>
-          </div>
-        )
-      
-      case 'system':
-        return (
-          <div className="system-message">
-            {msg.content}
-          </div>
-        )
-      
+  // 获取连接状态文本
+  const getConnectionText = () => {
+    switch (connectionStatus) {
+      case 'connected':
+        return '已连接'
+      case 'connecting':
+        return '连接中...'
+      case 'reconnecting':
+        return '重连中...'
+      case 'disconnected':
+        return '已断开'
+      case 'error':
+        return '连接错误'
       default:
-        return (
-          <div className="message-text">
-            {msg.sender === 'assistant' ? (
-              <ReactMarkdown>{msg.content}</ReactMarkdown>
-            ) : (
-              <span>{msg.content}</span>
-            )}
-            {msg.metadata?.isStreaming && (
-              <LoadingOutlined style={{ marginLeft: '8px', color: '#1890ff' }} />
-            )}
-          </div>
-        )
+        return '未知状态'
     }
   }
 
   // 渲染消息项
-  const renderMessage = (msg: Message, index: number) => (
-    <motion.div
-      key={msg.id}
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: index * 0.1 }}
-      className={`message-item ${msg.sender}`}
-    >
-      <div className="message-avatar">
-        <Avatar 
-          icon={msg.sender === 'user' ? <UserOutlined /> : <RobotOutlined />}
-          style={{ 
-            backgroundColor: msg.sender === 'user' ? '#1890ff' : '#52c41a' 
-          }}
-        />
-      </div>
-      
-      <div className="message-content">
-        <div className="message-header">
-          <span className="sender-name">
-            {msg.sender === 'user' ? '我' : 'AI助手'}
-          </span>
-          <span className="message-time">
-            {dayjs(msg.timestamp).format('HH:mm')}
-          </span>
+  const renderMessage = (msg: Message) => {
+    const isUser = msg.sender === 'user'
+    
+    return (
+      <motion.div
+        key={msg.id}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className={`message-item ${isUser ? 'user-message' : 'assistant-message'}`}
+      >
+        <div className="message-content">
+          <Avatar 
+            icon={isUser ? <UserOutlined /> : <RobotOutlined />}
+            className={`message-avatar ${isUser ? 'user-avatar' : 'assistant-avatar'}`}
+          />
+          <div className="message-bubble">
+            <div className="message-text">
+              {msg.type === 'text' ? (
+                <ReactMarkdown>{msg.content}</ReactMarkdown>
+              ) : (
+                <span>{msg.content}</span>
+              )}
+            </div>
+            <div className="message-time">
+              {dayjs(msg.timestamp).format('HH:mm')}
+            </div>
+          </div>
         </div>
-        
-        <div className="message-body">
-          {renderMessageContent(msg)}
+      </motion.div>
+    )
+  }
+
+  // 渲染流式消息
+  const renderStreamingMessage = () => {
+    if (!currentStreamingId || !streamingContent) return null
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="message-item assistant-message streaming-message"
+      >
+        <div className="message-content">
+          <Avatar 
+            icon={<RobotOutlined />}
+            className="message-avatar assistant-avatar"
+          />
+          <div className="message-bubble">
+            <div className="message-text">
+              <ReactMarkdown>{streamingContent}</ReactMarkdown>
+              <span className="streaming-cursor">|</span>
+            </div>
+          </div>
         </div>
-      </div>
-    </motion.div>
-  )
+      </motion.div>
+    )
+  }
 
   return (
     <div className={`chat-window ${className || ''}`}>
-      {/* 聊天头部 */}
+      {/* 头部状态栏 */}
       <div className="chat-header">
-        <div className="chat-title">
-          <RobotOutlined style={{ marginRight: '8px' }} />
-          AI旅行助手
-        </div>
+        <div className="chat-title">AI 旅行助手</div>
         <div className="connection-status">
-          <div className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`} />
-          {isConnected ? '已连接' : '连接中...'}
+          <Tooltip title={getConnectionText()}>
+            <span className="connection-indicator">
+              {getConnectionIcon()}
+              <span className="connection-text">{getConnectionText()}</span>
+            </span>
+          </Tooltip>
+          {connectionStatus !== 'connected' && (
+            <Button size="small" onClick={handleReconnect}>
+              重连
+            </Button>
+          )}
         </div>
       </div>
 
       {/* 消息列表 */}
-      <div className="messages-container">
+      <div className="chat-messages">
         <AnimatePresence>
-          {messages.length === 0 ? (
-            <motion.div 
-              className="welcome-message"
+          {messages.map(renderMessage)}
+          {renderStreamingMessage()}
+          {isLoading && !currentStreamingId && (
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ duration: 0.5 }}
+              exit={{ opacity: 0 }}
+              className="message-item assistant-message"
             >
-              <RobotOutlined style={{ fontSize: '48px', color: '#1890ff', marginBottom: '16px' }} />
-              <h3>欢迎使用AI旅行助手</h3>
-              <p>我可以帮您规划旅行路线、推荐景点、查询天气等。有什么可以帮您的吗？</p>
+              <div className="message-content">
+                <Avatar 
+                  icon={<RobotOutlined />}
+                  className="message-avatar assistant-avatar"
+                />
+                <div className="message-bubble">
+                  <div className="message-text">
+                    <Spin indicator={<LoadingOutlined />} />
+                    <span style={{ marginLeft: 8 }}>AI 正在思考...</span>
+                  </div>
+                </div>
+              </div>
             </motion.div>
-          ) : (
-            messages.map((msg, index) => renderMessage(msg, index))
+          )}
+          {isTyping && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="message-item assistant-message"
+            >
+              <div className="message-content">
+                <Avatar 
+                  icon={<RobotOutlined />}
+                  className="message-avatar assistant-avatar"
+                />
+                <div className="message-bubble">
+                  <div className="message-text">
+                    <span className="typing-indicator">正在输入...</span>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
           )}
         </AnimatePresence>
-
-        {/* 加载指示器 */}
-        {isLoading && (
-          <motion.div 
-            className="loading-message"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-          >
-            <Avatar icon={<RobotOutlined />} style={{ backgroundColor: '#52c41a' }} />
-            <div className="loading-content">
-              <Spin indicator={<LoadingOutlined style={{ fontSize: 16 }} />} />
-              <span style={{ marginLeft: '8px' }}>AI正在思考...</span>
-            </div>
-          </motion.div>
-        )}
-
         <div ref={messagesEndRef} />
       </div>
 
       {/* 输入区域 */}
-      <div className="input-container">
-        <div className="input-wrapper">
-          {/* 文件上传按钮 */}
-          <div className="upload-buttons">
-            <Upload
-              beforeUpload={handleFileUpload}
-              showUploadList={false}
-              accept="image/*"
-            >
-              <Tooltip title="上传图片">
-                <Button 
-                  type="text" 
-                  icon={<PictureOutlined />}
-                  className="upload-btn"
-                />
-              </Tooltip>
-            </Upload>
-
-            <Upload
-              beforeUpload={handleFileUpload}
-              showUploadList={false}
-              accept=".pdf,.doc,.docx,.txt"
-            >
-              <Tooltip title="上传文件">
-                <Button 
-                  type="text" 
-                  icon={<PaperClipOutlined />}
-                  className="upload-btn"
-                />
-              </Tooltip>
-            </Upload>
-          </div>
-
-          {/* 文本输入 */}
-          <Input.TextArea
+      <div className="chat-input">
+        <div className="input-container">
+          <Input
             ref={inputRef}
             value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
+            onChange={handleInputChange}
             onKeyPress={handleKeyPress}
-            placeholder="输入消息... (Shift+Enter换行)"
-            autoSize={{ minRows: 1, maxRows: 4 }}
-            disabled={!isConnected || isLoading}
-            className="message-input"
-          />
-
-          {/* 发送按钮 */}
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            onClick={() => sendMessage(inputValue)}
-            disabled={!isConnected || isLoading || !inputValue.trim()}
-            className="send-button"
+            placeholder="输入您的旅行需求..."
+            disabled={connectionStatus !== 'connected'}
+            suffix={
+              <div className="input-actions">
+                <Tooltip title="发送文件">
+                  <Upload
+                    showUploadList={false}
+                    beforeUpload={() => false}
+                  >
+                    <Button
+                      type="text"
+                      icon={<PaperClipOutlined />}
+                      size="small"
+                    />
+                  </Upload>
+                </Tooltip>
+                <Button
+                  type="primary"
+                  icon={<SendOutlined />}
+                  onClick={handleSendMessage}
+                  disabled={!inputValue.trim() || connectionStatus !== 'connected'}
+                  loading={isLoading && !currentStreamingId}
+                />
+              </div>
+            }
           />
         </div>
       </div>

@@ -4,11 +4,11 @@ FROM node:18-alpine as builder
 # 设置工作目录
 WORKDIR /app
 
-# 复制package.json和package-lock.json（如果存在）
-COPY package*.json ./
+# 复制package.json
+COPY package.json ./
 
-# 安装依赖
-RUN npm ci --only=production
+# 安装依赖（处理没有package-lock.json的情况）
+RUN npm install --production=false
 
 # 复制源码
 COPY . .
@@ -30,7 +30,7 @@ EXPOSE 80
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost/ || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost/ || exit 1
 
 # 启动nginx
 CMD ["nginx", "-g", "daemon off;"] 

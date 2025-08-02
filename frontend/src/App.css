@@ -1,0 +1,116 @@
+/* App组件样式 */
+.app-container {
+  min-height: 100vh;
+  background: #f0f2f5;
+}
+
+/* 页面过渡动画 */
+.page-transition-enter {
+  opacity: 0;
+  transform: translateX(20px);
+}
+
+.page-transition-enter-active {
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.page-transition-exit {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.page-transition-exit-active {
+  opacity: 0;
+  transform: translateX(-20px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* 主布局样式 */
+.main-layout {
+  min-height: 100vh;
+}
+
+.main-layout .ant-layout-sider {
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
+  z-index: 10;
+}
+
+.main-layout .ant-layout-header {
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+  box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+}
+
+.main-layout .ant-layout-content {
+  background: #f0f2f5;
+  overflow-x: hidden;
+}
+
+/* 侧边栏样式 */
+.sidebar-logo {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border-bottom: 1px solid #303030;
+}
+
+.sidebar-logo h1 {
+  color: white;
+  font-size: 18px;
+  font-weight: bold;
+  margin: 0;
+}
+
+/* 导航菜单样式 */
+.nav-menu .ant-menu-item {
+  margin-top: 4px;
+  border-radius: 0 25px 25px 0;
+}
+
+.nav-menu .ant-menu-item-selected {
+  background-color: #1890ff !important;
+}
+
+/* 头部用户菜单 */
+.user-dropdown {
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 6px;
+  transition: background-color 0.3s ease;
+}
+
+.user-dropdown:hover {
+  background-color: #f5f5f5;
+}
+
+/* 响应式布局 */
+@media (max-width: 768px) {
+  .main-layout .ant-layout-sider {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 1000;
+  }
+  
+  .main-layout .ant-layout-content {
+    margin-left: 0;
+  }
+}
+
+/* 暗黑模式支持 */
+[data-theme='dark'] .main-layout .ant-layout-header {
+  background: #141414;
+  border-bottom: 1px solid #303030;
+}
+
+[data-theme='dark'] .main-layout .ant-layout-content {
+  background: #0f1419;
+}
+
+[data-theme='dark'] .user-dropdown:hover {
+  background-color: #262626;
+} 
