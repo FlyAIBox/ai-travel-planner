@@ -371,7 +371,7 @@ class Itinerary(IDMixin, TimestampMixin):
     """行程安排模型"""
     
     # 基本信息
-    date: date = Field(..., description="日期")
+    date: "date" = Field(..., description="日期")
     day_number: int = Field(..., ge=1, description="第几天")
     title: Optional[str] = Field(None, description="行程标题")
     description: Optional[str] = Field(None, description="行程描述")

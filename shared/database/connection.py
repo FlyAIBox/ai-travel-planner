@@ -171,7 +171,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 @asynccontextmanager
-async def get_sync_session() -> Session:
+async def get_sync_session() -> AsyncGenerator[Session, None]:
     """获取同步会话"""
     database = await get_database()
     session = database.get_session()

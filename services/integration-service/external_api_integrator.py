@@ -9,8 +9,8 @@ import json
 import time
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union
-from dataclasses import dataclass, asdict, field
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field
 from enum import Enum
 from abc import ABC, abstractmethod
 import hashlib
@@ -28,7 +28,6 @@ try:
 except ImportError:
     RETRYING_AVAILABLE = False
 
-import structlog
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
 
@@ -444,7 +443,15 @@ class FlightAPIClient(APIClient):
     def _build_url(self, endpoint: str, params: Dict[str, Any]) -> str:
         """构建航班API URL"""
         base_url = self.credentials.endpoint_url or "https://api.example-flight.com/v1"
-        return f"{base_url}/{endpoint}"
+        url = f"{base_url}/{endpoint}"
+
+        # 添加查询参数
+        if params:
+            query_string = "&".join([f"{k}={v}" for k, v in params.items() if v is not None])
+            if query_string:
+                url += f"?{query_string}"
+
+        return url
     
     def _process_flight_data(self, raw_data: Any) -> List[Dict[str, Any]]:
         """处理航班数据"""
@@ -511,12 +518,14 @@ class FlightAPIClient(APIClient):
     
     async def _get_from_cache(self, key: str) -> Optional[Any]:
         """从缓存获取数据"""
-        # 这里应该集成实际的缓存系统
+        # TODO: 集成实际的缓存系统 (Redis/Memcached)
+        _ = key  # 占位符，避免未使用参数警告
         return None
-    
+
     async def _save_to_cache(self, key: str, data: Any):
         """保存数据到缓存"""
-        # 这里应该集成实际的缓存系统
+        # TODO: 集成实际的缓存系统 (Redis/Memcached)
+        _ = key, data  # 占位符，避免未使用参数警告
         pass
 
 
@@ -579,7 +588,15 @@ class HotelAPIClient(APIClient):
     def _build_url(self, endpoint: str, params: Dict[str, Any]) -> str:
         """构建酒店API URL"""
         base_url = self.credentials.endpoint_url or "https://api.example-hotel.com/v1"
-        return f"{base_url}/{endpoint}"
+        url = f"{base_url}/{endpoint}"
+
+        # 添加查询参数
+        if params:
+            query_string = "&".join([f"{k}={v}" for k, v in params.items() if v is not None])
+            if query_string:
+                url += f"?{query_string}"
+
+        return url
     
     def _process_hotel_data(self, raw_data: Any) -> List[Dict[str, Any]]:
         """处理酒店数据"""
@@ -649,10 +666,12 @@ class HotelAPIClient(APIClient):
     
     async def _get_from_cache(self, key: str) -> Optional[Any]:
         """从缓存获取数据"""
+        _ = key  # 占位符，避免未使用参数警告
         return None
-    
+
     async def _save_to_cache(self, key: str, data: Any):
         """保存数据到缓存"""
+        _ = key, data  # 占位符，避免未使用参数警告
         pass
 
 
@@ -709,7 +728,15 @@ class WeatherAPIClient(APIClient):
     def _build_url(self, endpoint: str, params: Dict[str, Any]) -> str:
         """构建天气API URL"""
         base_url = self.credentials.endpoint_url or "https://api.example-weather.com/v1"
-        return f"{base_url}/{endpoint}"
+        url = f"{base_url}/{endpoint}"
+
+        # 添加查询参数
+        if params:
+            query_string = "&".join([f"{k}={v}" for k, v in params.items() if v is not None])
+            if query_string:
+                url += f"?{query_string}"
+
+        return url
     
     def _process_weather_data(self, raw_data: Any) -> Dict[str, Any]:
         """处理天气数据"""
@@ -764,10 +791,12 @@ class WeatherAPIClient(APIClient):
     
     async def _get_from_cache(self, key: str) -> Optional[Any]:
         """从缓存获取数据"""
+        _ = key  # 占位符，避免未使用参数警告
         return None
-    
+
     async def _save_to_cache(self, key: str, data: Any):
         """保存数据到缓存"""
+        _ = key, data  # 占位符，避免未使用参数警告
         pass
 
 
@@ -824,7 +853,15 @@ class ExchangeRateAPIClient(APIClient):
     def _build_url(self, endpoint: str, params: Dict[str, Any]) -> str:
         """构建汇率API URL"""
         base_url = self.credentials.endpoint_url or "https://api.example-exchange.com/v1"
-        return f"{base_url}/{endpoint}"
+        url = f"{base_url}/{endpoint}"
+
+        # 添加查询参数
+        if params:
+            query_string = "&".join([f"{k}={v}" for k, v in params.items() if v is not None])
+            if query_string:
+                url += f"?{query_string}"
+
+        return url
     
     def _process_exchange_rate_data(self, raw_data: Any) -> Dict[str, Any]:
         """处理汇率数据"""
@@ -863,10 +900,12 @@ class ExchangeRateAPIClient(APIClient):
     
     async def _get_from_cache(self, key: str) -> Optional[Any]:
         """从缓存获取数据"""
+        _ = key  # 占位符，避免未使用参数警告
         return None
-    
+
     async def _save_to_cache(self, key: str, data: Any):
         """保存数据到缓存"""
+        _ = key, data  # 占位符，避免未使用参数警告
         pass
 
 
@@ -949,9 +988,10 @@ class DataIntegrator:
             DataSourceType.EXCHANGE_RATE, "get_exchange_rates", query
         )
     
-    async def _execute_with_fallback(self, data_source: DataSourceType, 
+    async def _execute_with_fallback(self, data_source: DataSourceType,
                                    operation: str, query: Dict[str, Any]) -> APIResponse:
         """带降级的执行请求"""
+        _ = operation  # 占位符，避免未使用参数警告
         self.integration_stats["total_requests"] += 1
         
         try:
@@ -1140,19 +1180,42 @@ class FallbackDataProvider:
             }
         }
     
-    async def get_fallback_data(self, data_source: DataSourceType, 
+    async def get_fallback_data(self, data_source: DataSourceType,
                                query: Dict[str, Any]) -> Any:
         """获取降级数据"""
+        # 基于查询参数提供更个性化的降级数据
+        fallback_data = {}
+
         if data_source == DataSourceType.FLIGHT:
-            return self.fallback_cache["flight_search"]
+            fallback_data = self.fallback_cache["flight_search"].copy()
+            if "origin" in query and "destination" in query:
+                fallback_data["query_info"] = {
+                    "origin": query["origin"],
+                    "destination": query["destination"],
+                    "message": "航班搜索服务暂时不可用，显示示例数据"
+                }
         elif data_source == DataSourceType.HOTEL:
-            return self.fallback_cache["hotel_search"]
+            fallback_data = self.fallback_cache["hotel_search"].copy()
+            if "location" in query:
+                fallback_data["query_info"] = {
+                    "location": query["location"],
+                    "message": "酒店搜索服务暂时不可用，显示示例数据"
+                }
         elif data_source == DataSourceType.WEATHER:
-            return self.fallback_cache["weather"]
+            fallback_data = self.fallback_cache["weather"].copy()
+            if "location" in query:
+                fallback_data["location"] = query["location"]
         elif data_source == DataSourceType.EXCHANGE_RATE:
-            return self.fallback_cache["exchange_rates"]
+            fallback_data = self.fallback_cache["exchange_rates"].copy()
+            if "from_currency" in query and "to_currency" in query:
+                fallback_data["query_info"] = {
+                    "from": query["from_currency"],
+                    "to": query["to_currency"]
+                }
         else:
-            return {"message": "服务暂时不可用，请稍后重试"}
+            fallback_data = {"message": "服务暂时不可用，请稍后重试"}
+
+        return fallback_data
 
 
 # 全局数据集成器实例
