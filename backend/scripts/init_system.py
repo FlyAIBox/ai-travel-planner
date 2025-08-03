@@ -58,7 +58,15 @@ async def init_database():
         
         # 使用同步引擎创建表
         from shared.database.connection import Base
-        Base.metadata.create_all(database.engine)
+        try:
+            Base.metadata.create_all(database.engine)
+        except Exception as e:
+            # 如果表已存在，忽略错误
+            if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                logger.warning(f"⚠️ 数据库表可能已存在: {e}")
+                logger.info("✅ 跳过表创建，使用现有表")
+            else:
+                raise e
         
         logger.info("✅ 数据库表创建完成")
         return True

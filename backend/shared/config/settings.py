@@ -7,7 +7,7 @@ import os
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,22 +43,34 @@ class Settings(BaseSettings):
     PASSWORD_SALT_ROUNDS: int = Field(default=12, description="密码盐轮数")
     
     # CORS和主机配置
-    ALLOWED_HOSTS: List[str] = Field(default=["*"], description="允许的主机")
-    CORS_ORIGINS: List[str] = Field(default=["*"], description="CORS源")
+    ALLOWED_HOSTS: str = Field(default="*", description="允许的主机")
+    CORS_ORIGINS: str = Field(default="*", description="CORS源")
 
-    @field_validator('ALLOWED_HOSTS', 'CORS_ORIGINS', mode='before')
-    @classmethod
-    def parse_comma_separated_list(cls, v):
-        """解析逗号分隔的字符串为列表"""
-        if isinstance(v, str):
+    @property
+    def allowed_hosts_list(self) -> List[str]:
+        """获取允许的主机列表"""
+        if isinstance(self.ALLOWED_HOSTS, str):
             # 如果是逗号分隔的字符串，分割为列表
-            if ',' in v:
-                return [item.strip() for item in v.split(',') if item.strip()]
+            if ',' in self.ALLOWED_HOSTS:
+                return [item.strip() for item in self.ALLOWED_HOSTS.split(',') if item.strip()]
             # 如果是单个值，返回包含该值的列表
-            return [v.strip()] if v.strip() else []
-        elif isinstance(v, list):
-            return v
-        return v
+            return [self.ALLOWED_HOSTS.strip()] if self.ALLOWED_HOSTS.strip() else ["*"]
+        elif isinstance(self.ALLOWED_HOSTS, list):
+            return self.ALLOWED_HOSTS
+        return ["*"]
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """获取CORS源列表"""
+        if isinstance(self.CORS_ORIGINS, str):
+            # 如果是逗号分隔的字符串，分割为列表
+            if ',' in self.CORS_ORIGINS:
+                return [item.strip() for item in self.CORS_ORIGINS.split(',') if item.strip()]
+            # 如果是单个值，返回包含该值的列表
+            return [self.CORS_ORIGINS.strip()] if self.CORS_ORIGINS.strip() else ["*"]
+        elif isinstance(self.CORS_ORIGINS, list):
+            return self.CORS_ORIGINS
+        return ["*"]
     
     # ==================== 数据库配置 ====================
     DATABASE_URL: str = Field(
