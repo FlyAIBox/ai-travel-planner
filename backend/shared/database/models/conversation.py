@@ -80,22 +80,9 @@ class ConversationORM(Base):
     )
     
     # 关联关系
-    messages: Mapped[List["MessageORM"]] = relationship(
-        "MessageORM", 
-        back_populates="conversation",
-        cascade="all, delete-orphan",
-        order_by="MessageORM.sequence_number"
-    )
-    summaries: Mapped[List["ConversationSummaryORM"]] = relationship(
-        "ConversationSummaryORM", 
-        back_populates="conversation",
-        cascade="all, delete-orphan"
-    )
-    metrics: Mapped[List["ConversationMetricsORM"]] = relationship(
-        "ConversationMetricsORM", 
-        back_populates="conversation",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -182,19 +169,11 @@ class MessageORM(Base):
     )
     
     # 关联关系
-    conversation: Mapped["ConversationORM"] = relationship("ConversationORM", back_populates="messages")
-    parent: Mapped[Optional["MessageORM"]] = relationship("MessageORM", remote_side=[id])
-    children: Mapped[List["MessageORM"]] = relationship("MessageORM", back_populates="parent")
-    attachments: Mapped[List["MessageAttachmentORM"]] = relationship(
-        "MessageAttachmentORM", 
-        back_populates="message",
-        cascade="all, delete-orphan"
-    )
-    tool_calls: Mapped[List["ToolCallORM"]] = relationship(
-        "ToolCallORM", 
-        back_populates="message",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -254,7 +233,7 @@ class MessageAttachmentORM(Base):
     )
     
     # 关联关系
-    message: Mapped["MessageORM"] = relationship("MessageORM", back_populates="attachments")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -309,7 +288,7 @@ class ToolCallORM(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="完成时间")
     
     # 关联关系
-    message: Mapped["MessageORM"] = relationship("MessageORM", back_populates="tool_calls")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -383,7 +362,7 @@ class ConversationSummaryORM(Base):
     )
     
     # 关联关系
-    conversation: Mapped["ConversationORM"] = relationship("ConversationORM", back_populates="summaries")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -445,7 +424,7 @@ class ConversationMetricsORM(Base):
     )
     
     # 关联关系
-    conversation: Mapped["ConversationORM"] = relationship("ConversationORM", back_populates="metrics")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (

@@ -18,6 +18,12 @@ from shared.vector_db.client import get_qdrant_client
 from shared.vector_db.collections import create_travel_collections
 from shared.config.settings import get_settings
 
+# 导入数据库创建相关模块
+import aiomysql
+from sqlalchemy import create_engine, text
+import uuid
+from passlib.context import CryptContext
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -26,6 +32,86 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+# 密码加密上下文
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+async def create_database_if_not_exists():
+    """创建数据库（如果不存在）"""
+    logger.info("🔧 检查并创建数据库...")
+
+    try:
+        # 构建不包含数据库名的连接URL，用于创建数据库
+        connection_params = {
+            'host': settings.MYSQL_HOST,
+            'port': settings.MYSQL_PORT,
+            'user': settings.MYSQL_USER,
+            'password': settings.MYSQL_PASSWORD,
+            'charset': 'utf8mb4',
+            'autocommit': True
+        }
+
+        # 连接到MySQL服务器（不指定数据库）
+        connection = await aiomysql.connect(**connection_params)
+
+        try:
+            cursor = await connection.cursor()
+
+            # 检查数据库是否存在
+            await cursor.execute(f"SHOW DATABASES LIKE '{settings.MYSQL_DATABASE}'")
+            result = await cursor.fetchone()
+
+            if result:
+                logger.info(f"✅ 数据库 '{settings.MYSQL_DATABASE}' 已存在")
+            else:
+                # 创建数据库
+                logger.info(f"📦 创建数据库 '{settings.MYSQL_DATABASE}'...")
+                await cursor.execute(
+                    f"CREATE DATABASE `{settings.MYSQL_DATABASE}` "
+                    f"CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                )
+                logger.info(f"✅ 数据库 '{settings.MYSQL_DATABASE}' 创建成功")
+
+            # 检查用户是否存在（如果用户不是root）
+            if settings.MYSQL_USER != 'root':
+                await cursor.execute(
+                    "SELECT User FROM mysql.user WHERE User = %s",
+                    (settings.MYSQL_USER,)
+                )
+                user_result = await cursor.fetchone()
+
+                if user_result:
+                    logger.info(f"✅ 用户 '{settings.MYSQL_USER}' 已存在")
+                else:
+                    # 创建用户
+                    logger.info(f"👤 创建用户 '{settings.MYSQL_USER}'...")
+                    await cursor.execute(
+                        f"CREATE USER '{settings.MYSQL_USER}'@'%' IDENTIFIED BY '{settings.MYSQL_PASSWORD}'"
+                    )
+
+                    # 授予权限
+                    await cursor.execute(
+                        f"GRANT ALL PRIVILEGES ON `{settings.MYSQL_DATABASE}`.* TO '{settings.MYSQL_USER}'@'%'"
+                    )
+
+                    # 刷新权限
+                    await cursor.execute("FLUSH PRIVILEGES")
+                    logger.info(f"✅ 用户 '{settings.MYSQL_USER}' 创建成功并授权")
+
+            await cursor.close()
+
+        finally:
+            connection.close()
+
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ 数据库创建失败: {e}")
+        logger.error("请确保MySQL服务已启动并且root用户可以连接")
+        logger.info("💡 提示：如果使用Docker，请先启动数据库服务：")
+        logger.info("   docker compose -f deployment/docker/docker-compose.dev.yml up -d mysql")
+        return False
 
 
 async def init_database():
@@ -155,32 +241,86 @@ async def init_knowledge_base():
 async def init_default_users():
     """初始化默认用户"""
     logger.info("👤 初始化默认用户...")
-    
+
     try:
-        # 这里可以创建一些默认用户
-        # 比如管理员用户、测试用户等
-        
+        # 获取数据库连接
+        database = await get_database()
+
+        # 默认用户数据
         default_users = [
             {
                 "username": "admin",
                 "email": "admin@ai-travel.com",
+                "password": "admin123456",  # 默认密码，生产环境应该修改
                 "role": "admin",
                 "description": "系统管理员"
             },
             {
                 "username": "demo_user",
-                "email": "demo@ai-travel.com", 
+                "email": "demo@ai-travel.com",
+                "password": "demo123456",  # 默认密码，生产环境应该修改
                 "role": "user",
                 "description": "演示用户"
             }
         ]
-        
-        logger.info(f"👥 创建 {len(default_users)} 个默认用户")
+
+        created_count = 0
+
+        async with database.get_async_session() as session:
+            from shared.database.models.user import UserORM
+            from shared.models.user import UserRole
+            from sqlalchemy import text
+            from datetime import datetime
+
+            for user_data in default_users:
+                # 检查用户是否已存在 (使用原生SQL避免关系映射问题)
+                check_sql = text("SELECT id FROM users WHERE username = :username")
+                result = await session.execute(check_sql, {"username": user_data["username"]})
+                existing_user = result.fetchone()
+
+                if existing_user:
+                    logger.info(f"⚠️ 用户 '{user_data['username']}' 已存在，跳过创建")
+                    continue
+
+                # 创建新用户
+                user_id = str(uuid.uuid4())
+                password_hash = pwd_context.hash(user_data["password"])
+
+                new_user = UserORM(
+                    id=user_id,
+                    username=user_data["username"],
+                    email=user_data["email"],
+                    password_hash=password_hash,
+                    role=UserRole.ADMIN if user_data["role"] == "admin" else UserRole.USER,
+                    status="active",
+                    is_verified=True,
+                    is_active=True,
+                    created_at=datetime.now(),
+                    notes=user_data["description"]
+                )
+
+                session.add(new_user)
+                created_count += 1
+                logger.info(f"✅ 创建用户: {user_data['username']} ({user_data['email']})")
+
+            # 提交事务
+            await session.commit()
+
+        logger.info(f"👥 成功创建 {created_count} 个默认用户")
+
+        if created_count > 0:
+            logger.info("🔐 默认用户密码:")
+            for user_data in default_users:
+                logger.info(f"  - {user_data['username']}: {user_data['password']}")
+            logger.warning("⚠️ 请在生产环境中修改默认密码！")
+
         logger.info("✅ 默认用户初始化完成")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ 默认用户初始化失败: {e}")
+        import traceback
+        logger.error(f"详细错误: {traceback.format_exc()}")
         return False
 
 
@@ -222,10 +362,14 @@ async def check_system_status():
 async def main():
     """主函数"""
     logger.info("🚀 开始初始化AI Travel Planner系统...")
-    
+
     success_count = 0
-    total_steps = 4
-    
+    total_steps = 5
+
+    # 步骤0: 创建数据库（如果不存在）
+    if await create_database_if_not_exists():
+        success_count += 1
+
     # 步骤1: 初始化数据库
     if await init_database():
         success_count += 1
@@ -262,6 +406,11 @@ async def main():
     logger.info("📱 前端应用: http://localhost:3000")
     logger.info("🚪 API网关: http://localhost:8080")
     logger.info("📚 API文档: http://localhost:8080/docs")
+    logger.info("")
+    logger.info("💡 提示:")
+    logger.info("  - 可以运行验证脚本检查数据库状态: python scripts/verify_database.py")
+    logger.info("  - 可以使用启动脚本启动数据库服务: ../scripts/start-database.sh")
+    logger.info("  - 查看详细文档: docs/database-setup.md")
 
     # 清理资源
     try:

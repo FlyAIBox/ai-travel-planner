@@ -115,25 +115,10 @@ class AgentORM(Base):
     last_active_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="最后活跃时间")
     
     # 关联关系
-    sessions: Mapped[List["AgentSessionORM"]] = relationship(
-        "AgentSessionORM", 
-        back_populates="agent",
-        cascade="all, delete-orphan"
-    )
-    interactions: Mapped[List["AgentInteractionORM"]] = relationship(
-        "AgentInteractionORM", 
-        back_populates="agent",
-        cascade="all, delete-orphan"
-    )
-    assigned_tasks: Mapped[List["TaskORM"]] = relationship(
-        "TaskORM", 
-        back_populates="assigned_agent"
-    )
-    performance_metrics: Mapped[List["AgentPerformanceMetricsORM"]] = relationship(
-        "AgentPerformanceMetricsORM", 
-        back_populates="agent",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -203,12 +188,8 @@ class AgentSessionORM(Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="结束时间")
     
     # 关联关系
-    agent: Mapped["AgentORM"] = relationship("AgentORM", back_populates="sessions")
-    interactions: Mapped[List["AgentInteractionORM"]] = relationship(
-        "AgentInteractionORM", 
-        back_populates="session",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -285,8 +266,8 @@ class AgentInteractionORM(Base):
     )
     
     # 关联关系
-    session: Mapped["AgentSessionORM"] = relationship("AgentSessionORM", back_populates="interactions")
-    agent: Mapped["AgentORM"] = relationship("AgentORM", back_populates="interactions")
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -382,14 +363,10 @@ class TaskORM(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="完成时间")
     
     # 关联关系
-    assigned_agent: Mapped[Optional["AgentORM"]] = relationship("AgentORM", back_populates="assigned_tasks")
-    parent_task: Mapped[Optional["TaskORM"]] = relationship("TaskORM", remote_side=[id])
-    children_tasks: Mapped[List["TaskORM"]] = relationship("TaskORM", back_populates="parent_task")
-    task_results: Mapped[List["TaskResultORM"]] = relationship(
-        "TaskResultORM", 
-        back_populates="task",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -459,7 +436,7 @@ class TaskResultORM(Base):
     )
     
     # 关联关系
-    task: Mapped["TaskORM"] = relationship("TaskORM", back_populates="task_results")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -535,11 +512,7 @@ class AgentTeamORM(Base):
     )
     
     # 关联关系
-    collaboration_sessions: Mapped[List["CollaborationSessionORM"]] = relationship(
-        "CollaborationSessionORM", 
-        back_populates="team",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -608,12 +581,8 @@ class CollaborationSessionORM(Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="结束时间")
     
     # 关联关系
-    team: Mapped["AgentTeamORM"] = relationship("AgentTeamORM", back_populates="collaboration_sessions")
-    messages: Mapped[List["AgentMessageORM"]] = relationship(
-        "AgentMessageORM", 
-        back_populates="collaboration_session",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -670,7 +639,7 @@ class AgentMessageORM(Base):
     read_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="阅读时间")
     
     # 关联关系
-    collaboration_session: Mapped["CollaborationSessionORM"] = relationship("CollaborationSessionORM", back_populates="messages")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -730,7 +699,7 @@ class AgentPerformanceMetricsORM(Base):
     )
     
     # 关联关系
-    agent: Mapped["AgentORM"] = relationship("AgentORM", back_populates="performance_metrics")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (

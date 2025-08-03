@@ -100,19 +100,10 @@ class KnowledgeDocumentORM(Base):
     indexed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="索引时间")
     
     # 关联关系
-    parent: Mapped[Optional["KnowledgeDocumentORM"]] = relationship("KnowledgeDocumentORM", remote_side=[id])
-    children: Mapped[List["KnowledgeDocumentORM"]] = relationship("KnowledgeDocumentORM", back_populates="parent")
-    chunks: Mapped[List["DocumentChunkORM"]] = relationship(
-        "DocumentChunkORM", 
-        back_populates="document",
-        cascade="all, delete-orphan",
-        order_by="DocumentChunkORM.chunk_index"
-    )
-    entities: Mapped[List["KnowledgeEntityORM"]] = relationship(
-        "KnowledgeEntityORM", 
-        secondary="document_entity_associations",
-        back_populates="documents"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -196,7 +187,7 @@ class DocumentChunkORM(Base):
     )
     
     # 关联关系
-    document: Mapped["KnowledgeDocumentORM"] = relationship("KnowledgeDocumentORM", back_populates="chunks")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -334,21 +325,9 @@ class KnowledgeEntityORM(Base):
     )
     
     # 关联关系
-    documents: Mapped[List["KnowledgeDocumentORM"]] = relationship(
-        "KnowledgeDocumentORM", 
-        secondary="document_entity_associations",
-        back_populates="entities"
-    )
-    subject_relations: Mapped[List["KnowledgeRelationORM"]] = relationship(
-        "KnowledgeRelationORM", 
-        foreign_keys="KnowledgeRelationORM.subject_id",
-        back_populates="subject"
-    )
-    object_relations: Mapped[List["KnowledgeRelationORM"]] = relationship(
-        "KnowledgeRelationORM", 
-        foreign_keys="KnowledgeRelationORM.object_id",
-        back_populates="object"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -399,16 +378,8 @@ class KnowledgeRelationORM(Base):
     )
     
     # 关联关系
-    subject: Mapped["KnowledgeEntityORM"] = relationship(
-        "KnowledgeEntityORM", 
-        foreign_keys=[subject_id],
-        back_populates="subject_relations"
-    )
-    object: Mapped["KnowledgeEntityORM"] = relationship(
-        "KnowledgeEntityORM", 
-        foreign_keys=[object_id],
-        back_populates="object_relations"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (

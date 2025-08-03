@@ -97,39 +97,12 @@ class TravelPlanORM(Base):
     )
     
     # 关联关系
-    destinations: Mapped[List["DestinationORM"]] = relationship(
-        "DestinationORM", 
-        back_populates="travel_plan",
-        cascade="all, delete-orphan",
-        order_by="DestinationORM.order"
-    )
-    travelers: Mapped[List["TravelerInfoORM"]] = relationship(
-        "TravelerInfoORM", 
-        back_populates="travel_plan",
-        cascade="all, delete-orphan"
-    )
-    budget_breakdown: Mapped["BudgetBreakdownORM"] = relationship(
-        "BudgetBreakdownORM", 
-        back_populates="travel_plan",
-        uselist=False,
-        cascade="all, delete-orphan"
-    )
-    flight_bookings: Mapped[List["FlightBookingORM"]] = relationship(
-        "FlightBookingORM", 
-        back_populates="travel_plan",
-        cascade="all, delete-orphan"
-    )
-    accommodation_bookings: Mapped[List["AccommodationBookingORM"]] = relationship(
-        "AccommodationBookingORM", 
-        back_populates="travel_plan",
-        cascade="all, delete-orphan"
-    )
-    itinerary_days: Mapped[List["ItineraryDayORM"]] = relationship(
-        "ItineraryDayORM", 
-        back_populates="travel_plan",
-        cascade="all, delete-orphan",
-        order_by="ItineraryDayORM.day_number"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -187,20 +160,10 @@ class DestinationORM(Base):
     order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="访问顺序")
     
     # 关联关系
-    travel_plan: Mapped["TravelPlanORM"] = relationship("TravelPlanORM", back_populates="destinations")
-    accommodations: Mapped[List["AccommodationBookingORM"]] = relationship(
-        "AccommodationBookingORM", 
-        back_populates="destination"
-    )
-    itinerary_days: Mapped[List["ItineraryDayORM"]] = relationship(
-        "ItineraryDayORM", 
-        back_populates="destination"
-    )
-    weather_info: Mapped[List["WeatherInfoORM"]] = relationship(
-        "WeatherInfoORM", 
-        back_populates="destination",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -249,7 +212,7 @@ class TravelerInfoORM(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否主要旅行者")
     
     # 关联关系
-    travel_plan: Mapped["TravelPlanORM"] = relationship("TravelPlanORM", back_populates="travelers")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -367,7 +330,7 @@ class BudgetBreakdownORM(Base):
     )
     
     # 关联关系
-    travel_plan: Mapped["TravelPlanORM"] = relationship("TravelPlanORM", back_populates="budget_breakdown")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -467,12 +430,8 @@ class FlightBookingORM(Base):
     check_in_opens_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="值机开放时间")
     
     # 关联关系
-    travel_plan: Mapped["TravelPlanORM"] = relationship("TravelPlanORM", back_populates="flight_bookings")
-    layovers: Mapped[List["LayoverORM"]] = relationship(
-        "LayoverORM", 
-        back_populates="flight_booking",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -513,7 +472,7 @@ class LayoverORM(Base):
     can_exit_airport: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否可以出机场")
     
     # 关联关系
-    flight_booking: Mapped["FlightBookingORM"] = relationship("FlightBookingORM", back_populates="layovers")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -620,8 +579,8 @@ class AccommodationBookingORM(Base):
     )
     
     # 关联关系
-    travel_plan: Mapped["TravelPlanORM"] = relationship("TravelPlanORM", back_populates="accommodation_bookings")
-    destination: Mapped[Optional["DestinationORM"]] = relationship("DestinationORM", back_populates="accommodations")
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -694,14 +653,9 @@ class ItineraryDayORM(Base):
     completion_notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment="完成备注")
     
     # 关联关系
-    travel_plan: Mapped["TravelPlanORM"] = relationship("TravelPlanORM", back_populates="itinerary_days")
-    destination: Mapped[Optional["DestinationORM"]] = relationship("DestinationORM", back_populates="itinerary_days")
-    activities: Mapped[List["ItineraryActivityORM"]] = relationship(
-        "ItineraryActivityORM", 
-        back_populates="itinerary_day",
-        cascade="all, delete-orphan",
-        order_by="ItineraryActivityORM.order"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -789,12 +743,8 @@ class ItineraryActivityORM(Base):
     notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment="备注")
     
     # 关联关系
-    itinerary_day: Mapped["ItineraryDayORM"] = relationship("ItineraryDayORM", back_populates="activities")
-    activity_bookings: Mapped[List["ActivityBookingORM"]] = relationship(
-        "ActivityBookingORM", 
-        back_populates="activity",
-        cascade="all, delete-orphan"
-    )
+    # 注意：为了避免外键依赖，暂时移除关系映射
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -857,7 +807,7 @@ class ActivityBookingORM(Base):
     cancellable_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="可取消截止时间")
     
     # 关联关系
-    activity: Mapped["ItineraryActivityORM"] = relationship("ItineraryActivityORM", back_populates="activity_bookings")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (
@@ -916,7 +866,7 @@ class WeatherInfoORM(Base):
     )
     
     # 关联关系
-    destination: Mapped["DestinationORM"] = relationship("DestinationORM", back_populates="weather_info")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 约束和索引
     __table_args__ = (

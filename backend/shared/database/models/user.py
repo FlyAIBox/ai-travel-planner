@@ -5,14 +5,13 @@
 
 from datetime import datetime, date
 from typing import Optional
-import json
 
 from sqlalchemy import (
-    Column, String, Integer, DateTime, Date, Boolean, Text, 
-    ForeignKey, JSON, Enum as SQLEnum, Float, Index
+    Integer, DateTime, Date, Boolean, Text,
+    JSON, Enum as SQLEnum, Float, Index
 )
-from sqlalchemy.orm import relationship, Mapped, mapped_column
-from sqlalchemy.dialects.mysql import CHAR, VARCHAR, LONGTEXT
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.mysql import CHAR, VARCHAR
 
 from shared.database.connection import Base
 from shared.models.user import UserRole, Gender, TravelStyle, LoyaltyTier
@@ -52,14 +51,8 @@ class UserORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
-    # 关系映射
-    profile = relationship("UserProfileORM", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    preferences = relationship("UserPreferencesORM", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    loyalty = relationship("LoyaltyProgramORM", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    settings = relationship("UserSettingsORM", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    sessions = relationship("UserSessionORM", back_populates="user", cascade="all, delete-orphan")
-    activities = relationship("UserActivityORM", back_populates="user", cascade="all, delete-orphan")
-    feedback = relationship("UserFeedbackORM", back_populates="user", cascade="all, delete-orphan")
+    # 注意：为了避免外键依赖，暂时移除所有关系映射
+    # 如果需要关联数据，请使用手动查询方式
     
     # 索引
     __table_args__ = (
@@ -93,8 +86,7 @@ class UserProfileORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
-    # 关系映射
-    user = relationship("UserORM", back_populates="profile")
+    # 注意：为了避免外键依赖，暂时移除关系映射
 
 class UserPreferencesORM(Base):
     """用户偏好ORM模型"""
@@ -156,8 +148,7 @@ class UserPreferencesORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
-    # 关系映射
-    user = relationship("UserORM", back_populates="preferences")
+    # 注意：为了避免外键依赖，暂时移除关系映射
 
 class LoyaltyProgramORM(Base):
     """忠诚度计划ORM模型"""
@@ -190,8 +181,7 @@ class LoyaltyProgramORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
-    # 关系映射
-    user = relationship("UserORM", back_populates="loyalty")
+    # 注意：为了避免外键依赖，暂时移除关系映射
 
 class UserSettingsORM(Base):
     """用户设置ORM模型"""
@@ -225,8 +215,7 @@ class UserSettingsORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
-    # 关系映射
-    user = relationship("UserORM", back_populates="settings")
+    # 注意：为了避免外键依赖，暂时移除关系映射
 
 class UserSessionORM(Base):
     """用户会话ORM模型"""
@@ -252,8 +241,7 @@ class UserSessionORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
-    # 关系映射
-    user = relationship("UserORM", back_populates="sessions")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 索引
     __table_args__ = (
@@ -282,8 +270,7 @@ class UserActivityORM(Base):
     # 时间戳
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False, index=True)
     
-    # 关系映射
-    user = relationship("UserORM", back_populates="activities")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 索引
     __table_args__ = (
@@ -315,8 +302,7 @@ class UserFeedbackORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False, index=True)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
-    # 关系映射
-    user = relationship("UserORM", back_populates="feedback")
+    # 注意：为了避免外键依赖，暂时移除关系映射
     
     # 索引
     __table_args__ = (
