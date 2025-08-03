@@ -60,6 +60,7 @@
         <br>• ✅ 后端 WebSocket 服务正常（直连测试成功）
         <br>• ✅ 前端开发服务器已重启
         <br>• ✅ Vite 代理配置正常工作
+        <br>• ✅ 前端用户ID生成逻辑已修复（使用稳定ID）
         <br>• 🔄 请重新测试代理连接！
     </div>
     
@@ -122,8 +123,9 @@
             }
 
             // 使用前端代理路径测试 WebSocket 连接
-            const userId = 'test_user_' + Date.now();
-            const sessionId = 'test_session_' + Date.now();
+            // 注意：现在使用稳定的用户ID，避免每次都生成新的ID
+            const userId = 'stable_test_user_123';
+            const sessionId = 'stable_test_session_456';
 
             // 通过前端代理的 WebSocket 路径格式
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';

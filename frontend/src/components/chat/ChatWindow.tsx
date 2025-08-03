@@ -1,12 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { Input, Button, List, Avatar, Spin, message, Upload, Tooltip } from 'antd'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { Input, Button, Avatar, Spin, message, Upload, Tooltip } from 'antd'
 import {
   SendOutlined,
   RobotOutlined,
   UserOutlined,
   PaperClipOutlined,
-  PictureOutlined,
-  FileTextOutlined,
   LoadingOutlined,
   WifiOutlined,
   DisconnectOutlined
@@ -16,11 +14,11 @@ import ReactMarkdown from 'react-markdown'
 import dayjs from 'dayjs'
 
 import './ChatWindow.css'
-import { 
-  WebSocketService, 
-  ChatMessage, 
+import {
+  WebSocketService,
+  ChatMessage,
   ConnectionStatus,
-  createWebSocketService 
+  createWebSocketService
 } from './WebSocketService'
 
 // 类型定义
@@ -53,9 +51,19 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   conversationId,
   onNewConversation,
   className,
-  userId = 'user_' + Date.now(),
+  userId: propUserId,
   apiBaseUrl = config.chat.wsUrl
 }) => {
+  // 使用 useMemo 确保用户ID在组件生命周期内保持稳定
+  const stableUserId = useMemo(() => {
+    return propUserId || `user_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`
+  }, [propUserId])
+
+  // 使用 useMemo 确保会话ID在组件生命周期内保持稳定
+  const stableSessionId = useMemo(() => {
+    return conversationId || `session_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`
+  }, [conversationId])
+
   // 状态管理
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
@@ -82,6 +90,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     console.log('ChatWindow 配置调试:')
     console.log('- config.chat.wsUrl:', config.chat.wsUrl)
     console.log('- apiBaseUrl prop:', apiBaseUrl)
+    console.log('- stableUserId:', stableUserId)
+    console.log('- stableSessionId:', stableSessionId)
 
     // 构建正确的WebSocket URL
     let wsUrl = apiBaseUrl
@@ -105,16 +115,16 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
     // 根据后端 WebSocket 端点格式 /ws/{user_id}，需要在 URL 中包含 user_id
     // 确保 URL 格式正确：ws://host:port/ws/{user_id}
-    if (!wsUrl.includes(`/ws/${userId}`)) {
+    if (!wsUrl.includes(`/ws/${stableUserId}`)) {
       // 如果 URL 不包含完整的 /ws/{user_id}，需要添加
       if (wsUrl.endsWith('/ws')) {
-        wsUrl += `/${userId}`
+        wsUrl += `/${stableUserId}`
         console.log('- 在 /ws 后添加 user_id:', wsUrl)
       } else if (wsUrl.endsWith('/')) {
-        wsUrl = wsUrl.slice(0, -1) + `/ws/${userId}`
+        wsUrl = wsUrl.slice(0, -1) + `/ws/${stableUserId}`
         console.log('- 添加 /ws/user_id 到路径:', wsUrl)
       } else {
-        wsUrl += `/ws/${userId}`
+        wsUrl += `/ws/${stableUserId}`
         console.log('- 添加 /ws/user_id 到路径:', wsUrl)
       }
     } else {
@@ -122,11 +132,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
 
     console.log('- 最终 WebSocket URL:', wsUrl)
-    
+
     webSocketService.current = createWebSocketService({
       url: wsUrl,
-      userId,
-      sessionId: conversationId || 'session_' + Date.now(),
+      userId: stableUserId,
+      sessionId: stableSessionId,
       reconnectInterval: 3000,
       maxReconnectAttempts: 5,
       heartbeatInterval: 30000
@@ -201,7 +211,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     return () => {
       ws.disconnect()
     }
-  }, [conversationId, userId, apiBaseUrl])
+  }, [stableUserId, stableSessionId, apiBaseUrl])
 
   // 滚动效果
   useEffect(() => {
@@ -263,7 +273,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   }, [])
 
   // 处理回车键
-  const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSendMessage()
@@ -448,7 +458,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             ref={inputRef}
             value={inputValue}
             onChange={handleInputChange}
-            onKeyPress={handleKeyPress}
+            onKeyDown={handleKeyDown}
             placeholder="输入您的旅行需求..."
             disabled={connectionStatus !== 'connected'}
             suffix={

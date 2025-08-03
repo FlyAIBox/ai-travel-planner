@@ -71,7 +71,7 @@ function getEnvVar(key: string, defaultValue: string = ''): string {
       const devConfig: Record<string, string> = {
         'VITE_API_BASE_URL': '/api/v1',
         'VITE_WS_URL': '/ws',
-        'VITE_CHAT_WS_URL': '/ws',
+        'VITE_CHAT_WS_URL': '/ws',  // 基础路径，user_id会在ChatWindow中动态添加
         'VITE_API_TIMEOUT': '30000',
         'VITE_WS_RECONNECT_ATTEMPTS': '5',
         'VITE_WS_RECONNECT_INTERVAL': '1000',
