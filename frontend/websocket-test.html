@@ -53,7 +53,7 @@
     <h1>WebSocket 连接测试工具</h1>
     
     <div class="status info">
-        <strong>测试地址：</strong> ws://172.16.1.3:8000/
+        <strong>测试地址：</strong> ws://172.16.1.3:8080 (多种路径)
     </div>
     
     <div id="status" class="status warning">
@@ -112,66 +112,134 @@
                 return;
             }
 
-            const wsUrl = 'ws://172.16.1.3:8000/';
+            // 尝试多种连接方式
+            const baseUrl = 'ws://172.16.1.3:8080';
             const userId = 'test_user_' + Date.now();
             const sessionId = 'test_session_' + Date.now();
-            const fullUrl = `${wsUrl}?userId=${userId}&sessionId=${sessionId}`;
 
-            log(`尝试连接到: ${fullUrl}`, 'info');
-            updateStatus('正在连接...', 'warning');
+            // 尝试多种路径和参数组合
+            const testUrls = [
+                `${baseUrl}/ws?userId=${userId}&sessionId=${sessionId}`,
+                `${baseUrl}/websocket?userId=${userId}&sessionId=${sessionId}`,
+                `${baseUrl}/chat?userId=${userId}&sessionId=${sessionId}`,
+                `${baseUrl}/api/ws?userId=${userId}&sessionId=${sessionId}`,
+                `${baseUrl}/api/websocket?userId=${userId}&sessionId=${sessionId}`,
+                `${baseUrl}/api/chat/ws?userId=${userId}&sessionId=${sessionId}`,
+                `${baseUrl}/?userId=${userId}&sessionId=${sessionId}`,
+                `${baseUrl}/ws`,
+                `${baseUrl}/websocket`,
+                `${baseUrl}/`,
+            ];
 
-            try {
-                ws = new WebSocket(fullUrl);
+            let currentUrlIndex = 0;
 
-                ws.onopen = function(event) {
-                    log('✅ WebSocket 连接成功！', 'success');
-                    updateStatus('已连接', 'success');
-                    connectBtn.disabled = true;
-                    disconnectBtn.disabled = false;
-                    sendBtn.disabled = false;
-                    messageInput.disabled = false;
-                    
-                    // 发送一个测试心跳消息
-                    setTimeout(() => {
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            const heartbeat = JSON.stringify({
-                                type: 'heartbeat',
-                                timestamp: Date.now()
-                            });
-                            ws.send(heartbeat);
-                            log('发送心跳消息: ' + heartbeat, 'info');
+            function tryConnect() {
+                if (currentUrlIndex >= testUrls.length) {
+                    log('❌ 所有连接方式都失败了', 'error');
+                    updateStatus('连接失败', 'error');
+                    return;
+                }
+
+                const fullUrl = testUrls[currentUrlIndex];
+                log(`尝试连接方式 ${currentUrlIndex + 1}/${testUrls.length}: ${fullUrl}`, 'info');
+                updateStatus('正在连接...', 'warning');
+
+                try {
+                    ws = new WebSocket(fullUrl);
+
+                    ws.onopen = function(event) {
+                        log(`✅ WebSocket 连接成功！使用 URL: ${fullUrl}`, 'success');
+                        updateStatus('已连接', 'success');
+                        connectBtn.disabled = true;
+                        disconnectBtn.disabled = false;
+                        sendBtn.disabled = false;
+                        messageInput.disabled = false;
+
+                        // 发送一个测试心跳消息
+                        setTimeout(() => {
+                            if (ws && ws.readyState === WebSocket.OPEN) {
+                                const heartbeat = JSON.stringify({
+                                    type: 'heartbeat',
+                                    timestamp: Date.now()
+                                });
+                                ws.send(heartbeat);
+                                log('发送心跳消息: ' + heartbeat, 'info');
+                            }
+                        }, 1000);
+                    };
+
+                    ws.onmessage = function(event) {
+                        log('📨 收到消息: ' + event.data, 'success');
+                    };
+
+                    ws.onclose = function(event) {
+                        const closeReasons = {
+                            1000: '正常关闭',
+                            1001: '端点离开',
+                            1002: '协议错误',
+                            1003: '不支持的数据类型',
+                            1004: '保留',
+                            1005: '没有状态码',
+                            1006: '异常关闭 (通常是网络问题或服务器拒绝连接)',
+                            1007: '数据格式错误',
+                            1008: '策略违规',
+                            1009: '消息太大',
+                            1010: '扩展协商失败',
+                            1011: '服务器错误',
+                            1015: 'TLS 握手失败'
+                        };
+
+                        const reason = closeReasons[event.code] || '未知原因';
+                        log(`🔌 连接关闭 - Code: ${event.code} (${reason}), Reason: ${event.reason || '无'}`, 'warning');
+
+                        if (event.code === 1006) {
+                            log('💡 错误 1006 分析: 连接异常关闭，可能原因:', 'warning');
+                            log('   - 服务器在握手过程中关闭了连接', 'warning');
+                            log('   - 服务器不支持 WebSocket 协议', 'warning');
+                            log('   - 需要特定的认证或头部信息', 'warning');
+                            log('   - 防火墙或代理阻止了连接', 'warning');
+
+                            // 尝试下一个 URL
+                            currentUrlIndex++;
+                            if (currentUrlIndex < testUrls.length) {
+                                log(`⏭️ 尝试下一个连接方式...`, 'info');
+                                setTimeout(tryConnect, 1000);
+                                return;
+                            }
                         }
-                    }, 1000);
-                };
 
-                ws.onmessage = function(event) {
-                    log('📨 收到消息: ' + event.data, 'success');
-                };
+                        updateStatus('连接已关闭', 'warning');
+                        resetButtons();
+                    };
 
-                ws.onclose = function(event) {
-                    log(`🔌 连接关闭 - Code: ${event.code}, Reason: ${event.reason}`, 'warning');
-                    updateStatus('连接已关闭', 'warning');
-                    resetButtons();
-                };
+                    ws.onerror = function(error) {
+                        log('❌ WebSocket 错误详情:', 'error');
+                        log(`   - 错误对象: ${error}`, 'error');
+                        log(`   - 错误类型: ${error.type || '未知'}`, 'error');
+                        log(`   - 当前 URL: ${fullUrl}`, 'error');
+                        updateStatus('连接错误', 'error');
+                    };
 
-                ws.onerror = function(error) {
-                    log('❌ WebSocket 错误: ' + error, 'error');
-                    updateStatus('连接错误', 'error');
-                    resetButtons();
-                };
+                    // 连接超时检测
+                    setTimeout(() => {
+                        if (ws && ws.readyState === WebSocket.CONNECTING) {
+                            log('⏰ 连接超时，正在关闭...', 'error');
+                            ws.close();
+                        }
+                    }, 5000);
 
-                // 连接超时检测
-                setTimeout(() => {
-                    if (ws && ws.readyState === WebSocket.CONNECTING) {
-                        log('⏰ 连接超时，正在关闭...', 'error');
-                        ws.close();
+                } catch (error) {
+                    log('❌ 创建 WebSocket 失败: ' + error.message, 'error');
+                    updateStatus('连接失败', 'error');
+                    currentUrlIndex++;
+                    if (currentUrlIndex < testUrls.length) {
+                        setTimeout(tryConnect, 1000);
                     }
-                }, 10000);
-
-            } catch (error) {
-                log('❌ 创建 WebSocket 失败: ' + error.message, 'error');
-                updateStatus('连接失败', 'error');
+                }
             }
+
+            // 开始第一次连接尝试
+            tryConnect();
         }
 
         function disconnect() {
