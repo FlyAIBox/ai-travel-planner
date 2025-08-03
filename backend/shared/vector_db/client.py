@@ -33,15 +33,12 @@ class QdrantManager:
             return
         
         try:
-            # 创建Qdrant客户端
+            # 创建Qdrant客户端 - 使用HTTP连接避免SSL问题
             self.client = QdrantClient(
-                host=settings.QDRANT_HOST,
-                port=settings.QDRANT_PORT,
-                grpc_port=settings.QDRANT_GRPC_PORT,
-                prefer_grpc=True,
+                url=f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}",
                 timeout=30,
                 # API密钥（如果配置）
-                api_key=getattr(settings, 'QDRANT_API_KEY', None)
+                api_key=getattr(settings, 'QDRANT_API_KEY', None) if getattr(settings, 'QDRANT_API_KEY', None) else None
             )
             
             # 测试连接

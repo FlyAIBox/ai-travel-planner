@@ -263,6 +263,23 @@ async def main():
     logger.info("🚪 API网关: http://localhost:8080")
     logger.info("📚 API文档: http://localhost:8080/docs")
 
+    # 清理资源
+    try:
+        from shared.database.connection import _database
+        if _database:
+            await _database.close()
+            logger.info("✅ 数据库连接已清理")
+    except Exception as e:
+        logger.warning(f"⚠️ 数据库连接清理失败: {e}")
+
+    try:
+        from shared.vector_db.client import _qdrant_manager
+        if _qdrant_manager:
+            await _qdrant_manager.close()
+            logger.info("✅ Qdrant连接已清理")
+    except Exception as e:
+        logger.warning(f"⚠️ Qdrant连接清理失败: {e}")
+
 
 if __name__ == "__main__":
     try:
