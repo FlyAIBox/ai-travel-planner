@@ -147,15 +147,26 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     // 设置事件监听器
     ws.on('onConnectionChange', (status: ConnectionStatus) => {
       setConnectionStatus(status)
-      
+
+      // 只在重要状态变化时显示消息，避免过多提示
       if (status === 'connected') {
-        message.success('连接已建立')
+        // 只在重连成功时显示成功消息，初始连接不显示
+        if (connectionStatus === 'reconnecting' || connectionStatus === 'error') {
+          message.success('连接已恢复')
+        }
       } else if (status === 'disconnected') {
-        message.warning('连接已断开')
+        // 只在意外断开时提示，正常关闭不提示
+        if (connectionStatus === 'connected') {
+          message.warning('连接已断开')
+        }
       } else if (status === 'error') {
-        message.error('连接错误')
+        // 只在持续错误时提示
+        if (connectionStatus !== 'error') {
+          message.error('连接出现问题，正在尝试重连...')
+        }
       } else if (status === 'reconnecting') {
-        message.info('正在重连...')
+        // 重连时的提示更温和
+        console.log('正在重连...')
       }
     })
 
@@ -201,11 +212,34 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       setIsLoading(false)
     })
 
-    // 建立连接
-    ws.connect().catch(err => {
-      console.error('WebSocket连接失败:', err)
-      message.error('无法连接到服务器')
-    })
+    // 延迟建立连接，给前端代理时间初始化
+    const connectWithDelay = async () => {
+      try {
+        // 等待500ms让前端代理完全初始化
+        await new Promise(resolve => setTimeout(resolve, 500))
+
+        console.log('开始建立WebSocket连接...')
+        await ws.connect()
+        console.log('WebSocket连接建立成功')
+      } catch (err) {
+        console.error('首次WebSocket连接失败:', err)
+
+        // 如果首次连接失败，等待1秒后重试
+        console.log('1秒后重试连接...')
+        setTimeout(async () => {
+          try {
+            await ws.connect()
+            console.log('重试连接成功')
+            message.success('连接已建立')
+          } catch (retryErr) {
+            console.error('重试连接也失败:', retryErr)
+            message.error('无法连接到服务器，请检查网络连接')
+          }
+        }, 1000)
+      }
+    }
+
+    connectWithDelay()
 
     // 清理函数
     return () => {
@@ -218,12 +252,39 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     scrollToBottom()
   }, [messages, streamingContent, scrollToBottom])
 
+  // 等待WebSocket连接建立
+  const waitForConnection = useCallback(async (maxWaitTime = 5000): Promise<boolean> => {
+    if (!webSocketService.current) {
+      return false
+    }
+
+    if (webSocketService.current.isConnected()) {
+      return true
+    }
+
+    console.log('等待WebSocket连接建立...')
+    message.info('正在建立连接，请稍候...')
+
+    return new Promise((resolve) => {
+      const startTime = Date.now()
+      const checkInterval = setInterval(() => {
+        if (webSocketService.current?.isConnected()) {
+          clearInterval(checkInterval)
+          console.log('WebSocket连接已建立')
+          resolve(true)
+        } else if (Date.now() - startTime > maxWaitTime) {
+          clearInterval(checkInterval)
+          console.log('WebSocket连接等待超时')
+          message.error('连接超时，请检查网络连接')
+          resolve(false)
+        }
+      }, 100) // 每100ms检查一次
+    })
+  }, [])
+
   // 发送消息
   const handleSendMessage = useCallback(async () => {
-    if (!inputValue.trim() || !webSocketService.current?.isConnected()) {
-      if (!webSocketService.current?.isConnected()) {
-        message.warning('连接未建立，请稍后重试')
-      }
+    if (!inputValue.trim()) {
       return
     }
 
@@ -231,26 +292,36 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     setInputValue('')
     setIsLoading(true)
 
-    // 添加用户消息到界面
-    const userMessage: Message = {
-      id: 'user_' + Date.now(),
-      content: messageContent,
-      type: 'text',
-      sender: 'user',
-      timestamp: new Date().toISOString()
-    }
-    
-    setMessages(prev => [...prev, userMessage])
-
     try {
+      // 等待连接建立（最多等待5秒）
+      const isConnected = await waitForConnection(5000)
+
+      if (!isConnected) {
+        setIsLoading(false)
+        setInputValue(messageContent) // 恢复输入内容
+        return
+      }
+
+      // 添加用户消息到界面
+      const userMessage: Message = {
+        id: 'user_' + Date.now(),
+        content: messageContent,
+        type: 'text',
+        sender: 'user',
+        timestamp: new Date().toISOString()
+      }
+
+      setMessages(prev => [...prev, userMessage])
+
       // 通过WebSocket发送消息
-      webSocketService.current.sendMessage(messageContent, 'user')
+      webSocketService.current!.sendMessage(messageContent, 'user')
     } catch (error) {
       console.error('发送消息失败:', error)
       message.error('发送消息失败')
+      setInputValue(messageContent) // 恢复输入内容
       setIsLoading(false)
     }
-  }, [inputValue])
+  }, [inputValue, waitForConnection])
 
   // 处理输入变化
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {

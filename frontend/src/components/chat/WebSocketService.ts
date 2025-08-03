@@ -86,7 +86,16 @@ export class WebSocketService {
     return new Promise((resolve, reject) => {
       try {
         this.setConnectionStatus('connecting');
-        
+
+        // 设置连接超时（10秒）
+        const connectionTimeout = setTimeout(() => {
+          if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+            this.ws.close();
+            this.setConnectionStatus('error');
+            reject(new Error('WebSocket连接超时'));
+          }
+        }, 10000);
+
         // 构建WebSocket URL
         // 注意：后端期望路径参数格式 /ws/{user_id}，而不是查询参数
         let wsUrl = this.options.url;
@@ -100,10 +109,12 @@ export class WebSocketService {
         }
 
         console.log('WebSocketService 连接 URL:', wsUrl);
+        console.log('等待连接建立...');
         this.ws = new WebSocket(wsUrl, this.options.protocols);
 
         this.ws.onopen = () => {
-          console.log('WebSocket连接已建立');
+          clearTimeout(connectionTimeout);
+          console.log('✅ WebSocket连接已成功建立');
           this.setConnectionStatus('connected');
           this.reconnectAttempts = 0;
           this.startHeartbeat();
@@ -116,10 +127,11 @@ export class WebSocketService {
         };
 
         this.ws.onclose = (event) => {
+          clearTimeout(connectionTimeout);
           console.log('WebSocket连接已关闭', event.code, event.reason);
           this.setConnectionStatus('disconnected');
           this.stopHeartbeat();
-          
+
           // 如果不是手动关闭，尝试重连
           if (event.code !== 1000) {
             this.attemptReconnect();
@@ -127,7 +139,8 @@ export class WebSocketService {
         };
 
         this.ws.onerror = (error) => {
-          console.error('WebSocket错误:', error);
+          clearTimeout(connectionTimeout);
+          console.error('❌ WebSocket连接错误:', error);
           this.setConnectionStatus('error');
           this.events.onError?.(new Error('WebSocket连接错误'));
           reject(error);

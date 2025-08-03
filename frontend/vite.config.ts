@@ -32,9 +32,21 @@ export default defineConfig({
         target: 'ws://172.16.1.3:8080',
         ws: true,
         changeOrigin: true,
+        timeout: 10000, // 10秒超时
+        proxyTimeout: 10000, // 代理超时
         rewrite: (path) => {
           console.log('WebSocket proxy rewrite:', path);
           return path; // 保持原路径
+        },
+        configure: (proxy) => {
+          // 添加错误处理
+          proxy.on('error', (err) => {
+            console.error('WebSocket proxy error:', err);
+          });
+
+          proxy.on('proxyReqWs', (proxyReq, req) => {
+            console.log('WebSocket proxy request:', req.url);
+          });
         }
       },
     },
