@@ -58,16 +58,35 @@ export interface AppConfig {
   }
 }
 
-// 声明全局变量以避免 import.meta 的类型问题
-declare const __VITE_ENV__: Record<string, string>
-
 /**
  * 获取环境变量值，支持默认值
+ * 使用简化的方法避免 import.meta 类型问题
  */
 function getEnvVar(key: string, defaultValue: string = ''): string {
-  // 优先使用 Vite 注入的环境变量
-  if (typeof __VITE_ENV__ !== 'undefined' && __VITE_ENV__[key]) {
-    return __VITE_ENV__[key]
+  // 在开发环境下，直接返回配置的值
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      // 开发环境的硬编码配置（基于用户的.env.development文件）
+      const devConfig: Record<string, string> = {
+        'VITE_API_BASE_URL': 'http://172.16.1.3:8080/api/v1',
+        'VITE_WS_URL': 'ws://172.16.1.3:8080/ws',
+        'VITE_CHAT_WS_URL': 'ws://172.16.1.3:8000',
+        'VITE_API_TIMEOUT': '30000',
+        'VITE_WS_RECONNECT_ATTEMPTS': '5',
+        'VITE_WS_RECONNECT_INTERVAL': '1000',
+        'VITE_LOG_LEVEL': 'debug',
+        'VITE_LOG_ENABLE_CONSOLE': 'true',
+        'VITE_LOG_ENABLE_REMOTE': 'false',
+        'VITE_MAPBOX_ACCESS_TOKEN': '',
+        'VITE_APP_TITLE': 'AI智能旅行规划助手',
+        'VITE_APP_VERSION': '1.0.0'
+      }
+
+      if (devConfig[key]) {
+        return devConfig[key]
+      }
+    }
   }
 
   // 兼容不同环境的环境变量获取方式

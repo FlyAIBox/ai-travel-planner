@@ -14,7 +14,7 @@ interface LoggerConfig {
   remoteEndpoint?: string
 }
 
-import config from '@/config/simple'
+import config from '@/config'
 
 // 默认配置
 const defaultConfig: LoggerConfig = {

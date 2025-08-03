@@ -86,7 +86,7 @@ vim .env.production
 ### 代码中使用
 ```typescript
 // 推荐：使用简化版配置
-import config from '@/config/simple'
+import config from '@/config'
 
 // 使用配置
 const apiClient = axios.create({
@@ -120,7 +120,7 @@ frontend:
 
 ```typescript
 // ✅ 推荐
-import config from '@/config/simple'
+import config from '@/config'
 
 // ⚠️ 可能有类型问题
 import config from '@/config'

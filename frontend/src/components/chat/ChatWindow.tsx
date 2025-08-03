@@ -47,7 +47,7 @@ interface ChatWindowProps {
   apiBaseUrl?: string
 }
 
-import config from '@/config/simple'
+import config from '@/config'
 
 const ChatWindow: React.FC<ChatWindowProps> = ({
   conversationId,
@@ -78,7 +78,37 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
   // 初始化WebSocket连接
   useEffect(() => {
-    const wsUrl = apiBaseUrl.replace('http', 'ws') + '/api/v1/chat/websocket'
+    // 调试信息
+    console.log('ChatWindow 配置调试:')
+    console.log('- config.chat.wsUrl:', config.chat.wsUrl)
+    console.log('- apiBaseUrl prop:', apiBaseUrl)
+
+    // 构建正确的WebSocket URL
+    let wsUrl = apiBaseUrl
+
+    // 如果apiBaseUrl是HTTP URL，转换为WebSocket URL
+    if (apiBaseUrl.startsWith('http://')) {
+      wsUrl = apiBaseUrl.replace('http://', 'ws://')
+      console.log('- 转换 HTTP 为 WS:', wsUrl)
+    } else if (apiBaseUrl.startsWith('https://')) {
+      wsUrl = apiBaseUrl.replace('https://', 'wss://')
+      console.log('- 转换 HTTPS 为 WSS:', wsUrl)
+    } else {
+      console.log('- 已经是 WebSocket URL:', wsUrl)
+    }
+
+    // 确保URL以正确的路径结尾
+    if (!wsUrl.includes('/api/v1/chat/websocket')) {
+      // 移除可能的尾部斜杠
+      wsUrl = wsUrl.replace(/\/$/, '')
+      // 添加正确的WebSocket路径
+      wsUrl += '/api/v1/chat/websocket'
+      console.log('- 添加路径后:', wsUrl)
+    } else {
+      console.log('- 路径已存在:', wsUrl)
+    }
+
+    console.log('- 最终 WebSocket URL:', wsUrl)
     
     webSocketService.current = createWebSocketService({
       url: wsUrl,

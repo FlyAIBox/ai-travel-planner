@@ -1,5 +1,5 @@
 import axios from 'axios'
-import config from '@/config/simple'
+import config from '@/config'
 
 // 创建axios实例
 const apiClient = axios.create({

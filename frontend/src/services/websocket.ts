@@ -147,7 +147,7 @@ export class WebSocketService {
   }
 }
 
-import config from '@/config/simple'
+import config from '@/config'
 
 // 创建全局WebSocket服务实例
 let wsService: WebSocketService | null = null
