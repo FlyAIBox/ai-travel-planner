@@ -19,7 +19,7 @@ from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassifica
 
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
-from .context_engine import ContextEngine, get_context_engine
+from context_engine import ContextEngine, get_context_engine
 
 logger = get_logger(__name__)
 settings = get_settings()

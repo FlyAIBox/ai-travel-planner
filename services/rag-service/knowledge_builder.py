@@ -32,9 +32,17 @@ except ImportError:
 from langchain.text_splitter import (
     RecursiveCharacterTextSplitter,
     MarkdownTextSplitter,
-    HTMLTextSplitter,
     PythonCodeTextSplitter
 )
+
+# 尝试导入HTMLTextSplitter，如果失败则使用RecursiveCharacterTextSplitter
+try:
+    from langchain.text_splitter import HTMLTextSplitter
+    HTML_SPLITTER_AVAILABLE = True
+except ImportError:
+    HTMLTextSplitter = RecursiveCharacterTextSplitter
+    HTML_SPLITTER_AVAILABLE = False
+
 from langchain.document_loaders import (
     TextLoader,
     JSONLoader,
@@ -50,7 +58,7 @@ except ImportError:
 import structlog
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
-from .vector_database import get_vector_database, VectorIndexConfig
+from vector_database import get_vector_database, VectorIndexConfig
 
 logger = get_logger(__name__)
 settings = get_settings()

@@ -230,8 +230,14 @@ class VectorDatabase:
         self.config = config or {}
         
         # 集群配置
+        # 从QDRANT_URL解析host和port
+        from urllib.parse import urlparse
+        parsed_url = urlparse(settings.QDRANT_URL)
+        default_host = parsed_url.hostname or "localhost"
+        default_port = parsed_url.port or 6333
+
         nodes = self.config.get("nodes", [
-            {"host": settings.QDRANT_HOST, "port": settings.QDRANT_PORT}
+            {"host": default_host, "port": default_port}
         ])
         self.connection_pool = VectorDatabasePool(nodes)
         

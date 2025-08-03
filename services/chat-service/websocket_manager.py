@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
-from .conversation_manager import ConversationManager, MessageType
+from conversation_manager import ConversationManager, MessageType
 
 logger = get_logger(__name__)
 settings = get_settings()

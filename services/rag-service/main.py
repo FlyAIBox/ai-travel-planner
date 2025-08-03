@@ -3,6 +3,14 @@ RAG服务主入口
 提供向量检索、知识库管理、文档处理等API端点
 """
 
+import sys
+from pathlib import Path
+
+# 添加项目根目录到Python路径
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import asyncio
 import json
 from datetime import datetime
@@ -16,8 +24,14 @@ from pydantic import BaseModel, Field
 
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
-from .vector_database import get_vector_database, VectorIndexConfig, VectorSearchResult
-from .knowledge_builder import get_knowledge_builder, DocumentMetadata, ProcessingResult
+
+# 导入当前服务的模块
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
+
+from vector_database import get_vector_database, VectorIndexConfig, VectorSearchResult
+from knowledge_builder import get_knowledge_builder, DocumentMetadata, ProcessingResult
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -77,7 +91,7 @@ async def get_redis_client():
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
         password=settings.REDIS_PASSWORD,
-        db=settings.REDIS_DB,
+        db=settings.REDIS_DB_CACHE,  # 使用缓存数据库
         decode_responses=True
     )
 

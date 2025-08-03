@@ -25,11 +25,18 @@ from pydantic import BaseModel, Field
 
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
-from .context_engine import get_context_engine
-from .websocket_manager import get_websocket_manager
-from .conversation_manager import get_conversation_manager, MessageType, ConversationStatus
-from .mcp_server import get_mcp_server
-from .mcp_tools import create_mcp_tools
+
+# 导入当前服务的模块
+import sys
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
+
+from context_engine import get_context_engine
+from websocket_manager import get_websocket_manager
+from conversation_manager import get_conversation_manager, MessageType, ConversationStatus
+from mcp_server import get_mcp_server
+from mcp_tools import create_mcp_tools
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -447,7 +454,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]):
         client_id = "api_client"
         
         # 构造MCP消息
-        from .mcp_server import MCPMessage
+        from mcp_server import MCPMessage
         message = MCPMessage(
             id="api_call",
             method="tools/call",

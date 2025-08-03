@@ -3,6 +3,14 @@
 实现多角色智能体协作、任务分发、结果聚合等功能
 """
 
+import sys
+from pathlib import Path
+
+# 添加项目根目录到Python路径
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import asyncio
 import json
 from datetime import datetime, timedelta
@@ -686,7 +694,7 @@ async def get_redis_client():
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
         password=settings.REDIS_PASSWORD,
-        db=settings.REDIS_DB,
+        db=settings.REDIS_DB_AGENT,  # 使用智能体数据库
         decode_responses=True
     )
 
