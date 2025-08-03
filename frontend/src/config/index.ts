@@ -71,7 +71,7 @@ function getEnvVar(key: string, defaultValue: string = ''): string {
       const devConfig: Record<string, string> = {
         'VITE_API_BASE_URL': 'http://172.16.1.3:8080/api/v1',
         'VITE_WS_URL': 'ws://172.16.1.3:8080/ws',
-        'VITE_CHAT_WS_URL': 'ws://172.16.1.3:8000',
+        'VITE_CHAT_WS_URL': 'ws://172.16.1.3:8000/',
         'VITE_API_TIMEOUT': '30000',
         'VITE_WS_RECONNECT_ATTEMPTS': '5',
         'VITE_WS_RECONNECT_INTERVAL': '1000',

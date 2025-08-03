@@ -97,15 +97,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       console.log('- 已经是 WebSocket URL:', wsUrl)
     }
 
-    // 确保URL以正确的路径结尾
-    if (!wsUrl.includes('/api/v1/chat/websocket')) {
-      // 移除可能的尾部斜杠
-      wsUrl = wsUrl.replace(/\/$/, '')
-      // 添加正确的WebSocket路径
-      wsUrl += '/api/v1/chat/websocket'
-      console.log('- 添加路径后:', wsUrl)
+    // WebSocket URL 已经是完整的，不需要添加额外路径
+    // 确保 URL 格式正确
+    if (!wsUrl.endsWith('/')) {
+      wsUrl += '/'
+      console.log('- 添加尾部斜杠:', wsUrl)
     } else {
-      console.log('- 路径已存在:', wsUrl)
+      console.log('- URL 格式正确:', wsUrl)
     }
 
     console.log('- 最终 WebSocket URL:', wsUrl)
