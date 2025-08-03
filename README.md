@@ -2,97 +2,10 @@
 
 一个基于现代AI技术栈的智能旅行规划助手，集成大模型、RAG、多智能体协作和工作流自动化技术，为用户提供个性化的端到端旅行规划服务。
 
-## 🚀 项目状态更新
 
-### ✅ 已完成功能
-
-#### 后端服务 (100% 完成)
-- **✅ 向量数据库基础设施** - Qdrant集群配置、持久化存储、性能优化
-- **✅ RAG知识检索系统** - 混合检索策略、结果重排序、查询优化
-- **✅ 多角色智能体系统** - LangChain框架、专业智能体、协调机制
-- **✅ MCP协议集成** - 服务器架构、工具注册、安全验证
-- **✅ 旅行规划引擎** - 约束求解、路径优化、动态重规划
-- **✅ API网关服务** - 路由配置、认证中间件、负载均衡
-- **✅ 对话管理服务** - WebSocket实时通信、上下文工程
-
-#### 前端界面 (95% 完成)
-- **✅ React 18 + TypeScript** - 现代化前端框架
-- **✅ 状态管理系统** - Redux Toolkit + React Query
-- **✅ 页面组件** - 首页、聊天页面、计划页面、用户中心
-- **✅ 认证系统** - 登录/注册页面、受保护路由
-- **✅ 布局组件** - 响应式布局、导航菜单
-
-#### 基础设施 (100% 完成)
-- **✅ Docker容器化** - 多服务编排、环境隔离
-- **✅ 数据库系统** - MySQL主数据库、Redis缓存、Qdrant向量库
-- **✅ 监控和日志** - 结构化日志、性能监控
-- **✅ 配置管理** - 环境变量、容器配置
-
-### ⚡ 快速启动系统
-
-#### 方法1：一键启动（推荐）
-```bash
-# 1. 启动基础数据服务
-docker compose -f deployment/docker/docker-compose.dev.yml up -d redis qdrant mysql
-
-# 2. 等待服务就绪（约30秒）
-sleep 30
-
-# 3. 验证基础服务
-curl http://localhost:6333/collections  # Qdrant
-curl http://localhost:3306              # MySQL（可能需要MySQL客户端）
-redis-cli ping                          # Redis
-
-# 4. 启动应用服务（如果依赖已安装）
-docker compose -f deployment/docker/docker-compose.dev.yml up -d
-```
-
-#### 方法2：本地开发启动
-```bash
-# 1. 启动基础服务
-docker compose -f deployment/docker/docker-compose.dev.yml up -d redis qdrant mysql
-
-# 2. 安装Python依赖
-pip install -r requirements.txt
-
-# 3. 启动后端服务（分别在不同终端）
-cd services/chat-service && python -m uvicorn main:app --host 0.0.0.0 --port 8080 --reload
-cd services/rag-service && python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
-cd services/agent-service && python -m uvicorn main:app --host 0.0.0.0 --port 8002 --reload
-
-# 4. 启动前端（需要先安装Node.js依赖）
-cd frontend
-npm install
-npm run dev
-```
-
-### 🔧 当前状态和下一步
-
-#### 系统运行状态
-- **基础服务**: ✅ MySQL、Redis、Qdrant 全部正常运行
-- **后端API**: ✅ 核心逻辑完成，需要安装Python依赖
-- **前端界面**: ⚠️ 组件完成，需要安装Node.js依赖
-
-#### 需要解决的问题
-1. **前端依赖安装**
-   ```bash
-   cd frontend
-   npm install  # 安装React、TypeScript、Ant Design等依赖
-   ```
-
-2. **后端依赖安装**
-   ```bash
-   pip install -r requirements.txt  # 安装Python依赖
-   ```
-
-3. **环境配置**
-   - 检查 `.env` 文件配置
-   - 确保端口不冲突（8080, 8001, 8002, 3000, 6333, 6379, 3306）
-
-### 📊 技术架构完整性
+### 📊 技术架构
 
 ```
-✅ 已完成的核心功能
 ┌─────────────────────────────────────────┐
 │ 🗄️ 数据层                               │
 │ ├── MySQL (用户数据、计划数据)           │
@@ -231,72 +144,138 @@ ai-travel-planner/
 
 ## 🚀 快速开始
 
-### 环境要求
+### 系统要求
 
-- Python 3.10+
-- Docker & Docker Compose
-- NVIDIA GPU (推荐，用于AI推理)
-- 16GB+ RAM
+#### 硬件要求
+- **CPU**: 4核心以上
+- **内存**: 8GB以上（推荐16GB）
+- **存储**: 20GB可用空间
+- **网络**: 稳定的互联网连接
+- **GPU**: NVIDIA GPU (推荐，用于AI推理)
 
-### 一键启动系统
+#### 软件要求
+- **操作系统**: Linux/macOS/Windows
+- **Docker**: 20.10+
+- **Docker Compose**: 2.0+
+- **Python**: 3.10+ (本地开发)
+- **Node.js**: 16+ (前端开发)
 
-#### 🎯 推荐方法：使用启动脚本
+### 开发环境启动流程
 
-1. **克隆项目**
+#### 🎯 推荐方法：一键启动脚本
+
 ```bash
+# 克隆项目
 git clone https://github.com/FlyAIBox/ai-travel-planner.git
 cd ai-travel-planner
-```
 
-2. **一键启动**
-```bash
-# 自动化启动整个系统（推荐）
-./scripts/start_system.sh
+# 一键启动整个系统
+chmod +x backend/scripts/start_system.sh
+./backend/scripts/start_system.sh
 
 # 查看系统状态
-./scripts/start_system.sh status
+./backend/scripts/start_system.sh status
 
 # 查看实时日志
-./scripts/start_system.sh logs
+./backend/scripts/start_system.sh logs
 
 # 停止系统
-./scripts/start_system.sh stop
+./backend/scripts/start_system.sh stop
 ```
 
-#### 🔧 手动启动方法
+#### 🔧 手动启动方法（开发环境）
 
-1. **初始化系统**
+按照以下8个步骤手动启动开发环境：
+
+##### 步骤1：启动基础服务
 ```bash
-# 启动基础服务
+# 启动数据库和缓存服务
 docker compose -f deployment/docker/docker-compose.dev.yml up -d redis qdrant mysql
 
-# 等待服务启动完成（约30秒）
+# 等待服务就绪（约30-60秒）
+docker compose -f deployment/docker/docker-compose.dev.yml logs -f mysql
+```
+
+##### 步骤2：初始化数据库数据
+```bash
+# 等待基础服务完全启动
 sleep 30
 
-# 初始化系统（创建数据库、向量集合、构建知识库）
+# 运行系统初始化脚本
+cd backend
 python scripts/init_system.py
 ```
 
-2. **启动所有服务**
+##### 步骤3：安装Python依赖
 ```bash
-# 启动完整系统
-docker compose -f deployment/docker/docker-compose.dev.yml up -d
+# 在backend目录下安装Python依赖
+cd backend
+pip install -r requirements.txt
 
-# 查看服务状态
-docker compose -f deployment/docker/docker-compose.dev.yml ps
+# 或使用虚拟环境（推荐）
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+# venv\Scripts\activate   # Windows
+pip install -r requirements.txt
 ```
 
-3. **验证系统**
+##### 步骤4：修改配置文件
+```bash
+# 复制环境变量模板
+cp .env.example .env
+
+# 编辑环境变量配置
+vim .env
+```
+
+**重要环境变量配置：**
+```env
+# 数据库配置
+MYSQL_ROOT_PASSWORD=your_secure_root_password
+MYSQL_DATABASE=ai_travel_db
+MYSQL_USER=ai_travel_user
+MYSQL_PASSWORD=your_secure_password
+
+# Redis配置
+REDIS_PASSWORD=your_redis_password
+
+# JWT配置
+JWT_SECRET_KEY=your_super_secret_jwt_key_change_in_production
+
+# API密钥
+OPENAI_API_KEY=your_openai_api_key
+ZHIPU_API_KEY=your_zhipu_api_key
+
+# 第三方服务
+HEWEATHER_API_KEY=your_weather_api_key
+```
+
+##### 步骤5：启动后端服务
+```bash
+# 方法1：使用统一启动脚本（推荐）
+chmod +x scripts/start_backend_services.sh
+./scripts/start_backend_services.sh
+
+# 方法2：手动启动各个服务（分别在不同终端）
+cd services/chat-service && python -m uvicorn main:app --host 0.0.0.0 --port 8080 --reload
+cd services/rag-service && python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+cd services/agent-service && python -m uvicorn main:app --host 0.0.0.0 --port 8002 --reload
+cd services/user-service && python -m uvicorn main:app --host 0.0.0.0 --port 8003 --reload
+cd services/planning-service && python -m uvicorn main:app --host 0.0.0.0 --port 8004 --reload
+cd services/integration-service && python -m uvicorn main:app --host 0.0.0.0 --port 8005 --reload
+cd services/api-gateway && python -m uvicorn main:app --host 0.0.0.0 --port 8080 --reload
+```
+
+##### 步骤6：验证后端服务
 ```bash
 # 检查各服务健康状态
 curl http://localhost:8080/api/v1/health  # Chat服务
 curl http://localhost:8001/api/v1/health  # RAG服务
-curl http://localhost:8002/api/v1/health  # 智能体服务
-curl http://localhost:8003/api/v1/health  # 用户服务
+curl http://localhost:8002/api/v1/health  # Agent服务
+curl http://localhost:8003/api/v1/health  # User服务
+curl http://localhost:8004/api/v1/health  # Planning服务
+curl http://localhost:8005/api/v1/health  # Integration服务
 curl http://localhost:8080/gateway/health # API网关
-
-# 检查MCP工具列表
-curl http://localhost:8080/api/v1/mcp/tools
 
 # 测试聊天API
 curl -X POST http://localhost:8080/api/v1/chat \
@@ -304,17 +283,117 @@ curl -X POST http://localhost:8080/api/v1/chat \
   -d '{"content": "我想去北京旅游", "user_id": "test_user"}'
 ```
 
-### 服务端点
+##### 步骤7：启动前端服务
+```bash
+# 安装前端依赖并启动
+cd frontend
+npm install
+npm run dev
 
-- **Chat服务**: http://localhost:8080
-  - API文档: http://localhost:8080/docs
-  - WebSocket: ws://localhost:8080/ws/{user_id}
-- **向量数据库**: http://localhost:6333
-- **Redis缓存**: localhost:6379
-- **MySQL数据库**: localhost:3306
-- **n8n工作流**: http://localhost:5678 (admin/ai_travel_n8n)
-- **Prometheus监控**: http://localhost:9090
-- **Grafana仪表板**: http://localhost:3000 (admin/ai_travel_grafana)
+# 或使用yarn
+yarn install
+yarn dev
+```
+
+##### 步骤8：验证前端服务
+```bash
+# 访问前端应用
+http://localhost:3000
+
+# 检查前端健康状态
+curl http://localhost:3000/health
+```
+
+### 服务端口映射
+
+| 服务 | 端口 | 访问地址 | 描述 |
+|------|------|----------|------|
+| 前端应用 | 3000 | http://localhost:3000 | React前端界面 |
+| API网关 | 8080 | http://localhost:8080 | 统一API入口 |
+| Chat服务 | 8080 | http://localhost:8080/docs | 对话服务API文档 |
+| RAG服务 | 8001 | http://localhost:8001/docs | 检索增强生成 |
+| Agent服务 | 8002 | http://localhost:8002/docs | 智能体服务 |
+| User服务 | 8003 | http://localhost:8003/docs | 用户管理 |
+| Planning服务 | 8004 | http://localhost:8004/docs | 行程规划 |
+| Integration服务 | 8005 | http://localhost:8005/docs | 外部集成 |
+| MySQL | 3306 | localhost:3306 | 主数据库 |
+| Redis | 6379 | localhost:6379 | 缓存数据库 |
+| Qdrant | 6333 | http://localhost:6333 | 向量数据库 |
+| n8n工作流 | 5678 | http://localhost:5678 | 工作流引擎 (admin/ai_travel_n8n) |
+| Prometheus | 9090 | http://localhost:9090 | 监控数据收集 |
+| Grafana | 3000 | http://localhost:3000 | 监控可视化 (admin/ai_travel_grafana) |
+
+### 管理命令
+
+#### 启动/停止服务
+```bash
+# 启动所有服务
+docker compose -f deployment/docker/docker-compose.dev.yml up -d
+
+# 停止所有服务
+docker compose -f deployment/docker/docker-compose.dev.yml down
+
+# 重启特定服务
+docker compose -f deployment/docker/docker-compose.dev.yml restart chat-service
+
+# 查看服务状态
+docker compose -f deployment/docker/docker-compose.dev.yml ps
+```
+
+#### 日志管理
+```bash
+# 查看所有服务日志
+docker compose -f deployment/docker/docker-compose.dev.yml logs -f
+
+# 查看特定服务日志
+docker compose -f deployment/docker/docker-compose.dev.yml logs -f chat-service
+
+# 查看最近100行日志
+docker compose -f deployment/docker/docker-compose.dev.yml logs --tail=100 chat-service
+```
+
+### 常见问题解决
+
+#### 1. 端口冲突
+**问题**: 端口已被占用
+**解决**:
+```bash
+# 查看端口占用
+netstat -tulpn | grep :8080
+# 或者修改docker-compose.dev.yml中的端口映射
+```
+
+#### 2. 内存不足
+**问题**: 容器启动失败，内存不足
+**解决**:
+- 增加系统内存
+- 减少并发启动的服务数量
+- 调整Docker内存限制
+
+#### 3. 数据库连接失败
+**问题**: 应用无法连接数据库
+**解决**:
+```bash
+# 检查数据库容器状态
+docker compose -f deployment/docker/docker-compose.dev.yml logs mysql
+
+# 重启数据库服务
+docker compose -f deployment/docker/docker-compose.dev.yml restart mysql
+
+# 检查环境变量配置
+```
+
+#### 4. 服务启动顺序问题
+**问题**: 服务依赖导致启动失败
+**解决**:
+```bash
+# 按顺序启动服务
+docker compose -f deployment/docker/docker-compose.dev.yml up -d redis mysql qdrant
+sleep 30
+docker compose -f deployment/docker/docker-compose.dev.yml up -d chat-service rag-service
+sleep 15
+docker compose -f deployment/docker/docker-compose.dev.yml up -d api-gateway frontend
+```
 
 ## 📚 文档
 
