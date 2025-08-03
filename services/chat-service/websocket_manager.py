@@ -78,9 +78,9 @@ class WebSocketMessage(BaseModel):
 class WebSocketManager:
     """WebSocket连接管理器"""
     
-    def __init__(self, conversation_manager: ConversationManager = None):
+    def __init__(self, conversation_manager=None):
         self.conversation_manager = conversation_manager
-        self.redis_client = self._create_redis_client()
+        self.redis_client = None  # 延迟初始化Redis客户端
         
         # 连接管理
         self.active_connections: Dict[str, WebSocketConnection] = {}
@@ -95,22 +95,24 @@ class WebSocketManager:
         self._heartbeat_task = None
         self._cleanup_task = None
     
-    def _create_redis_client(self) -> redis.Redis:
-        """创建Redis客户端"""
-        try:
-            client = redis.Redis(
-                host=settings.REDIS_HOST,
-                port=settings.REDIS_PORT,
-                password=settings.REDIS_PASSWORD,
-                db=settings.REDIS_DB_SESSION,
-                decode_responses=True
-            )
-            # 测试连接
-            client.ping()
-            return client
-        except Exception as e:
-            logger.error(f"Redis连接失败: {e}")
-            return None
+    async def _get_redis_client(self) -> redis.Redis:
+        """获取Redis客户端（异步）"""
+        if self.redis_client is None:
+            try:
+                self.redis_client = redis.Redis(
+                    host=settings.REDIS_HOST,
+                    port=settings.REDIS_PORT,
+                    password=settings.REDIS_PASSWORD,
+                    db=settings.REDIS_DB_SESSION,
+                    decode_responses=True
+                )
+                # 测试连接
+                await self.redis_client.ping()
+                logger.info("Redis连接成功")
+            except Exception as e:
+                logger.error(f"Redis连接失败: {e}")
+                self.redis_client = None
+        return self.redis_client
 
     def start(self):
         """启动WebSocket管理器"""
@@ -152,7 +154,7 @@ class WebSocketManager:
             websocket=websocket,
             connected_at=now,
             last_activity=now,
-                status=ConnectionStatus.CONNECTED,
+            status=ConnectionStatus.CONNECTED,
             metadata=metadata or {}
         )
         
@@ -173,7 +175,7 @@ class WebSocketManager:
         # 记录连接信息到Redis
         await self._save_connection_to_redis(connection)
             
-            # 发送连接成功消息
+        # 发送连接成功消息
         await self.send_to_connection(connection_id, {
             "type": MessageTypeWS.NOTIFICATION.value,
             "content": {
@@ -222,7 +224,8 @@ class WebSocketManager:
                 del self.conversation_connections[connection.conversation_id]
         
         # 从活跃连接中移除
-        del self.active_connections[connection_id]
+        if connection_id in self.active_connections:
+            del self.active_connections[connection_id]
         
         # 更新Redis状态
         await self._save_connection_to_redis(connection)
@@ -456,7 +459,8 @@ class WebSocketManager:
                 await asyncio.sleep(3600)  # 每小时清理一次
                 
                 # 清理Redis中的过期连接记录
-                if self.redis_client:
+                redis_client = await self._get_redis_client()
+                if redis_client:
                     cutoff_time = datetime.now() - timedelta(hours=24)
                     # TODO: 添加Redis清理逻辑
                     _ = cutoff_time  # 占位符，避免未使用变量警告
@@ -480,14 +484,23 @@ class WebSocketManager:
     async def _save_connection_to_redis(self, connection: WebSocketConnection):
         """保存连接信息到Redis"""
 
-        if not self.redis_client:
+        redis_client = await self._get_redis_client()
+        if not redis_client:
             return
 
         try:
             key = f"websocket_connection:{connection.connection_id}"
-            data = json.dumps(connection.to_dict())
-            # 使用同步方法，因为 self.redis_client 是同步客户端
-            self.redis_client.setex(key, 86400, data)  # 24小时过期
+            # 只保存可序列化的数据
+            data = {
+                "connection_id": connection.connection_id,
+                "user_id": connection.user_id,
+                "conversation_id": connection.conversation_id,
+                "connected_at": connection.connected_at.isoformat(),
+                "last_activity": connection.last_activity.isoformat(),
+                "status": connection.status.value,
+                "metadata": connection.metadata
+            }
+            await redis_client.setex(key, 86400, json.dumps(data))  # 24小时过期
         except Exception as e:
             logger.error(f"保存连接信息到Redis失败: {e}")
     

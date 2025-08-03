@@ -97,7 +97,7 @@ async def lifespan(app: FastAPI):
     # 初始化组件
     context_engine = get_context_engine(redis_client)
     conversation_manager = get_conversation_manager(redis_client)
-    websocket_manager = get_websocket_manager(redis_client)
+    websocket_manager = get_websocket_manager(conversation_manager)
     mcp_server = get_mcp_server()
     
     # 启动WebSocket管理器
@@ -200,7 +200,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, conversation_id
         if connection_id:
             await websocket_manager.disconnect(connection_id, f"connection_error: {str(e)}")
     finally:
-        if connection_id:
+        # 只有在连接ID存在且连接还没有被断开的情况下才调用disconnect
+        if connection_id and connection_id in websocket_manager.active_connections:
             await websocket_manager.disconnect(connection_id, "connection_closed")
 
 
