@@ -14,15 +14,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """应用配置设置"""
     
+    # model_config 是 Pydantic v2 配置模型的专用属性，用于定义 Settings 类的全局配置行为。
+    # 下面详细解释每个配置项的作用：
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
-        env_parse_none_str="None",
-        env_parse_enums=True
+        env_file=".env",                   # 指定环境变量文件路径，优先从 .env 文件加载环境变量
+        env_file_encoding="utf-8",         # 指定 .env 文件的编码格式为 UTF-8，确保中文等字符正常读取
+        case_sensitive=False,              # 环境变量名不区分大小写，方便在不同操作系统下使用
+        extra="ignore",                    # 忽略未在模型中声明的额外字段，防止因多余配置报错
+        env_parse_none_str="None",         # 当环境变量值为字符串 "None" 时，自动解析为 Python 的 None
+        env_parse_enums=True               # 支持将环境变量自动解析为枚举类型，提升类型安全
     )
-    
     # ==================== 应用基础配置 ====================
     APP_NAME: str = Field(default="AI Travel Planner", description="应用名称")
     APP_VERSION: str = Field(default="1.0.0", description="应用版本")

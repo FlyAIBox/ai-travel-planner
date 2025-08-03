@@ -170,6 +170,7 @@ async def get_redis_pool(db: int = 0) -> ConnectionPool:
     if db not in _redis_pools:
         _redis_pools[db] = ConnectionPool.from_url(
             settings.REDIS_URL,
+            password=settings.REDIS_PASSWORD,
             db=db,
             encoding="utf-8",
             decode_responses=True,

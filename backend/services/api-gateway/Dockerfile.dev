@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
 
 # 复制依赖文件
 COPY requirements.txt .
-COPY ../../requirements.txt /tmp/requirements.txt
+COPY ../../backend/requirements.txt /tmp/requirements.txt
 
 # 安装Python依赖
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \

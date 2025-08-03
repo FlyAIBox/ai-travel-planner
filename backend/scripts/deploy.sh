@@ -276,8 +276,8 @@ run_tests() {
     cd "$PROJECT_ROOT"
     
     # 运行单元测试
-    if [ -f "scripts/run_tests.py" ]; then
-        python scripts/run_tests.py
+    if [ -f "backend/scripts/run_tests.py" ]; then
+        python backend/scripts/run_tests.py
     else
         log_warning "测试脚本不存在，跳过测试"
     fi

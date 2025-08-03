@@ -295,10 +295,10 @@ init_system_data() {
     # 等待服务完全启动
     sleep 10
     
-    if [ -f "$PROJECT_ROOT/scripts/init_system.py" ]; then
+    if [ -f "$PROJECT_ROOT/backend/scripts/init_system.py" ]; then
         log_info "运行数据初始化脚本..."
         cd "$PROJECT_ROOT"
-        python scripts/init_system.py
+        python backend/scripts/init_system.py
         log_success "数据初始化完成"
     else
         log_warning "初始化脚本不存在，跳过数据初始化"

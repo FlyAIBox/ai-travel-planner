@@ -53,7 +53,7 @@ services:
   chat-service:
     build:
       context: ../../
-      dockerfile: services/chat-service/Dockerfile
+      dockerfile: backend/services/chat-service/Dockerfile
     container_name: ai-travel-chat-dev
     ports:
       - "8080:8080"
@@ -73,8 +73,8 @@ services:
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-ai_travel_pass}
       - LOG_LEVEL=info
     volumes:
-      - ../../services/chat-service:/app
-      - ../../shared:/app/shared
+      - ../../backend/services/chat-service:/app
+      - ../../backend/shared:/app/shared
       - ../../data:/app/data
     depends_on:
       - redis
@@ -89,7 +89,7 @@ services:
   rag-service:
     build:
       context: ../../
-      dockerfile: services/rag-service/Dockerfile
+      dockerfile: backend/services/rag-service/Dockerfile
     container_name: ai-travel-rag-dev
     ports:
       - "8001:8001"
@@ -104,8 +104,8 @@ services:
       - EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
       - LOG_LEVEL=info
     volumes:
-      - ../../services/rag-service:/app
-      - ../../shared:/app/shared
+      - ../../backend/services/rag-service:/app
+      - ../../backend/shared:/app/shared
       - ../../data:/app/data
     depends_on:
       - redis
@@ -118,7 +118,7 @@ services:
   agent-service:
     build:
       context: ../../
-      dockerfile: services/agent-service/Dockerfile
+      dockerfile: backend/services/agent-service/Dockerfile
     container_name: ai-travel-agent-dev
     ports:
       - "8002:8002"
@@ -130,8 +130,8 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
       - LOG_LEVEL=info
     volumes:
-      - ../../services/agent-service:/app
-      - ../../shared:/app/shared
+      - ../../backend/services/agent-service:/app
+      - ../../backend/shared:/app/shared
     depends_on:
       - redis
     networks:
@@ -142,7 +142,7 @@ services:
   user-service:
     build:
       context: ../../
-      dockerfile: services/user-service/Dockerfile
+      dockerfile: backend/services/user-service/Dockerfile
     container_name: ai-travel-user-dev
     ports:
       - "8003:8003"
@@ -160,8 +160,8 @@ services:
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your_jwt_secret_key_here_please_change_in_production}
       - LOG_LEVEL=info
     volumes:
-      - ../../services/user-service:/app
-      - ../../shared:/app/shared
+      - ../../backend/services/user-service:/app
+      - ../../backend/shared:/app/shared
     depends_on:
       - redis
       - mysql
@@ -173,7 +173,7 @@ services:
   planning-service:
     build:
       context: ../../
-      dockerfile: services/planning-service/Dockerfile
+      dockerfile: backend/services/planning-service/Dockerfile
     container_name: ai-travel-planning-dev
     ports:
       - "8004:8004"
@@ -185,8 +185,8 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
       - LOG_LEVEL=info
     volumes:
-      - ../../services/planning-service:/app
-      - ../../shared:/app/shared
+      - ../../backend/services/planning-service:/app
+      - ../../backend/shared:/app/shared
     depends_on:
       - redis
     networks:
@@ -197,7 +197,7 @@ services:
   integration-service:
     build:
       context: ../../
-      dockerfile: services/integration-service/Dockerfile
+      dockerfile: backend/services/integration-service/Dockerfile
     container_name: ai-travel-integration-dev
     ports:
       - "8005:8005"
@@ -209,8 +209,8 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
       - LOG_LEVEL=info
     volumes:
-      - ../../services/integration-service:/app
-      - ../../shared:/app/shared
+      - ../../backend/services/integration-service:/app
+      - ../../backend/shared:/app/shared
     depends_on:
       - redis
     networks:
@@ -237,7 +237,7 @@ services:
   api-gateway:
     build:
       context: ../../
-      dockerfile: services/api-gateway/Dockerfile
+      dockerfile: backend/services/api-gateway/Dockerfile
     container_name: ai-travel-gateway-dev
     ports:
       - "8080:8080"
@@ -262,8 +262,8 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-ai_travel_redis}
       - LOG_LEVEL=info
     volumes:
-      - ../../services/api-gateway:/app
-      - ../../shared:/app/shared
+      - ../../backend/services/api-gateway:/app
+      - ../../backend/shared:/app/shared
     depends_on:
       - chat-service
       - rag-service
