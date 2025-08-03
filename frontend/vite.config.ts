@@ -23,12 +23,12 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: process.env.VITE_PROXY_API_TARGET || 'http://localhost:8080',
         changeOrigin: true,
         secure: false,
       },
       '/ws': {
-        target: 'ws://localhost:8080',
+        target: process.env.VITE_PROXY_WS_TARGET || 'ws://localhost:8080',
         ws: true,
         changeOrigin: true,
       },

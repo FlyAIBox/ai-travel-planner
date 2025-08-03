@@ -14,12 +14,16 @@ interface LoggerConfig {
   remoteEndpoint?: string
 }
 
+import config from '@/config/simple'
+
 // 默认配置
 const defaultConfig: LoggerConfig = {
-  level: process.env.NODE_ENV === 'development' ? LogLevel.DEBUG : LogLevel.INFO,
-  enableConsole: true,
-  enableRemote: false,
-  remoteEndpoint: '/api/v1/logs',
+  level: config.logging.level === 'debug' ? LogLevel.DEBUG :
+        config.logging.level === 'info' ? LogLevel.INFO :
+        config.logging.level === 'warn' ? LogLevel.WARN : LogLevel.ERROR,
+  enableConsole: config.logging.enableConsole,
+  enableRemote: config.logging.enableRemote,
+  remoteEndpoint: `${config.api.baseUrl}/logs`,
 }
 
 class Logger {

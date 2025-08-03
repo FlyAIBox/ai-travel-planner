@@ -147,15 +147,14 @@ export class WebSocketService {
   }
 }
 
+import config from '@/config/simple'
+
 // 创建全局WebSocket服务实例
 let wsService: WebSocketService | null = null
 
 export const getWebSocketService = () => {
   if (!wsService) {
-    const wsUrl = process.env.NODE_ENV === 'development' 
-      ? 'ws://localhost:8080/ws' 
-      : `ws://${window.location.host}/ws`
-    wsService = new WebSocketService(wsUrl)
+    wsService = new WebSocketService(config.websocket.url)
   }
   return wsService
 }

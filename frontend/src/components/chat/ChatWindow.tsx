@@ -47,12 +47,14 @@ interface ChatWindowProps {
   apiBaseUrl?: string
 }
 
+import config from '@/config/simple'
+
 const ChatWindow: React.FC<ChatWindowProps> = ({
   conversationId,
   onNewConversation,
   className,
   userId = 'user_' + Date.now(),
-  apiBaseUrl = 'ws://localhost:8000'
+  apiBaseUrl = config.chat.wsUrl
 }) => {
   // 状态管理
   const [messages, setMessages] = useState<Message[]>([])
