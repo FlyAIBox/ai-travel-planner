@@ -149,6 +149,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, conversation_id
     """WebSocket连接端点"""
     connection_id = None
     websocket_manager = app.state.websocket_manager
+    websocket_accepted = False
 
     try:
         # 建立连接
@@ -158,30 +159,44 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, conversation_id
             conversation_id=conversation_id,
             metadata={"user_agent": websocket.headers.get("user-agent", "")}
         )
-        
+        websocket_accepted = True
+
         logger.info(f"WebSocket连接建立: {connection_id}")
-        
+
         # 监听消息
         while True:
             try:
                 # 接收消息
                 raw_message = await websocket.receive_text()
-                
+
                 # 处理消息
                 await websocket_manager.handle_message(connection_id, raw_message)
-                
+
             except WebSocketDisconnect:
                 logger.info(f"WebSocket客户端断开连接: {connection_id}")
                 break
             except Exception as e:
                 logger.error(f"WebSocket消息处理错误: {e}")
-                await websocket_manager.send_to_connection(connection_id, {
-                    "type": "error",
-                    "content": {"error": f"消息处理错误: {str(e)}"}
-                })
-    
+                # 只有在连接已接受的情况下才发送错误消息
+                if websocket_accepted and connection_id:
+                    try:
+                        await websocket_manager.send_to_connection(connection_id, {
+                            "type": "error",
+                            "content": {"error": f"消息处理错误: {str(e)}"}
+                        })
+                    except Exception as send_error:
+                        logger.error(f"发送错误消息失败: {send_error}")
+
     except Exception as e:
         logger.error(f"WebSocket连接错误: {e}")
+        # 如果连接还没有被接受，尝试接受并关闭
+        if not websocket_accepted:
+            try:
+                await websocket.accept()
+                await websocket.close(code=1011, reason=f"连接错误: {str(e)}")
+            except Exception as close_error:
+                logger.error(f"关闭未接受的WebSocket失败: {close_error}")
+
         if connection_id:
             await websocket_manager.disconnect(connection_id, f"connection_error: {str(e)}")
     finally:

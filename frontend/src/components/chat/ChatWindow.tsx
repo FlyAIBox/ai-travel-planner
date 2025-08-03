@@ -86,8 +86,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     // 构建正确的WebSocket URL
     let wsUrl = apiBaseUrl
 
-    // 如果apiBaseUrl是HTTP URL，转换为WebSocket URL
-    if (apiBaseUrl.startsWith('http://')) {
+    // 处理不同类型的 URL
+    if (apiBaseUrl.startsWith('/')) {
+      // 相对路径，构建完整的 WebSocket URL (使用代理)
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const host = window.location.host
+      wsUrl = `${protocol}//${host}${apiBaseUrl}`
+      console.log('- 构建代理 WebSocket URL:', wsUrl)
+    } else if (apiBaseUrl.startsWith('http://')) {
       wsUrl = apiBaseUrl.replace('http://', 'ws://')
       console.log('- 转换 HTTP 为 WS:', wsUrl)
     } else if (apiBaseUrl.startsWith('https://')) {
@@ -99,17 +105,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
     // 根据后端 WebSocket 端点格式 /ws/{user_id}，需要在 URL 中包含 user_id
     // 确保 URL 格式正确：ws://host:port/ws/{user_id}
-    if (!wsUrl.endsWith('/ws')) {
-      // 如果 URL 不是以 /ws 结尾，需要添加 user_id
-      if (wsUrl.endsWith('/')) {
-        wsUrl = wsUrl.slice(0, -1) // 移除尾部斜杠
+    if (!wsUrl.includes(`/ws/${userId}`)) {
+      // 如果 URL 不包含完整的 /ws/{user_id}，需要添加
+      if (wsUrl.endsWith('/ws')) {
+        wsUrl += `/${userId}`
+        console.log('- 在 /ws 后添加 user_id:', wsUrl)
+      } else if (wsUrl.endsWith('/')) {
+        wsUrl = wsUrl.slice(0, -1) + `/ws/${userId}`
+        console.log('- 添加 /ws/user_id 到路径:', wsUrl)
+      } else {
+        wsUrl += `/ws/${userId}`
+        console.log('- 添加 /ws/user_id 到路径:', wsUrl)
       }
-      wsUrl += `/${userId}`
-      console.log('- 添加 user_id 到路径:', wsUrl)
     } else {
-      // 如果 URL 以 /ws 结尾，添加 user_id
-      wsUrl += `/${userId}`
-      console.log('- 在 /ws 后添加 user_id:', wsUrl)
+      console.log('- URL 已包含正确的 user_id 路径:', wsUrl)
     }
 
     console.log('- 最终 WebSocket URL:', wsUrl)

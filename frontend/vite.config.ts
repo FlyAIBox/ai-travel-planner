@@ -23,14 +23,19 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: process.env.VITE_PROXY_API_TARGET || 'http://localhost:8080',
+        target: 'http://172.16.1.3:8080',
         changeOrigin: true,
         secure: false,
       },
-      '/ws': {
-        target: process.env.VITE_PROXY_WS_TARGET || 'ws://localhost:8080',
+      // WebSocket 代理配置
+      '^/ws/.*': {
+        target: 'ws://172.16.1.3:8080',
         ws: true,
         changeOrigin: true,
+        rewrite: (path) => {
+          console.log('WebSocket proxy rewrite:', path);
+          return path; // 保持原路径
+        }
       },
     },
   },

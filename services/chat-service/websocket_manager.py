@@ -105,6 +105,8 @@ class WebSocketManager:
                 db=settings.REDIS_DB_SESSION,
                 decode_responses=True
             )
+            # 测试连接
+            client.ping()
             return client
         except Exception as e:
             logger.error(f"Redis连接失败: {e}")
@@ -477,14 +479,15 @@ class WebSocketManager:
     
     async def _save_connection_to_redis(self, connection: WebSocketConnection):
         """保存连接信息到Redis"""
-        
+
         if not self.redis_client:
             return
-        
+
         try:
             key = f"websocket_connection:{connection.connection_id}"
             data = json.dumps(connection.to_dict())
-            await self.redis_client.setex(key, 86400, data)  # 24小时过期
+            # 使用同步方法，因为 self.redis_client 是同步客户端
+            self.redis_client.setex(key, 86400, data)  # 24小时过期
         except Exception as e:
             logger.error(f"保存连接信息到Redis失败: {e}")
     

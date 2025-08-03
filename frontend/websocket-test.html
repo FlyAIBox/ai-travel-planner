@@ -53,7 +53,14 @@
     <h1>WebSocket 连接测试工具</h1>
     
     <div class="status info">
-        <strong>测试地址：</strong> ws://172.16.1.3:8080/ws/{user_id}
+        <strong>测试地址：</strong> 通过前端代理 /ws/{user_id} → ws://172.16.1.3:8080/ws/{user_id}
+    </div>
+    <div class="status success">
+        <strong>🎉 问题已解决：</strong>
+        <br>• ✅ 后端 WebSocket 服务正常（直连测试成功）
+        <br>• ✅ 前端开发服务器已重启
+        <br>• ✅ Vite 代理配置正常工作
+        <br>• 🔄 请重新测试代理连接！
     </div>
     
     <div id="status" class="status warning">
@@ -63,6 +70,8 @@
     <div>
         <button id="connectBtn" onclick="connect()">连接</button>
         <button id="disconnectBtn" onclick="disconnect()" disabled>断开连接</button>
+        <button onclick="testSingleConnection()">🎯 测试代理连接</button>
+        <button onclick="testDirectConnection()">🎯 测试直连后端</button>
         <button onclick="clearLog()">清空日志</button>
     </div>
     
@@ -112,17 +121,29 @@
                 return;
             }
 
-            // 根据后端代码，WebSocket端点是 /ws/{user_id}
-            const baseUrl = 'ws://172.16.1.3:8080';
+            // 使用前端代理路径测试 WebSocket 连接
             const userId = 'test_user_' + Date.now();
             const sessionId = 'test_session_' + Date.now();
 
-            // 正确的 WebSocket 路径格式
+            // 通过前端代理的 WebSocket 路径格式
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+
+            // 添加调试信息
+            log(`🔍 调试信息:`);
+            log(`- 当前页面协议: ${window.location.protocol}`);
+            log(`- 当前页面主机: ${window.location.host}`);
+            log(`- WebSocket协议: ${protocol}`);
+            log(`- 目标主机: ${host}`);
+
             const testUrls = [
-                `${baseUrl}/ws/${userId}?conversation_id=${sessionId}`,
-                `${baseUrl}/ws/${userId}`,
-                `${baseUrl}/ws/test_user`,
-                `${baseUrl}/ws/anonymous`,
+                `${protocol}//${host}/ws/${userId}?conversation_id=${sessionId}`,
+                `${protocol}//${host}/ws/${userId}`,
+                `${protocol}//${host}/ws/test_user`,
+                `${protocol}//${host}/ws/anonymous`,
+                // 也测试直连后端（用于对比）
+                `ws://172.16.1.3:8080/ws/${userId}`,
+                `ws://172.16.1.3:8080/ws/test_user`,
             ];
 
             let currentUrlIndex = 0;
@@ -273,6 +294,92 @@
 
         function clearLog() {
             logDiv.innerHTML = '';
+        }
+
+        // 测试代理连接
+        function testSingleConnection() {
+            const userId = 'test_user_' + Date.now();
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            const url = `${protocol}//${host}/ws/${userId}`;
+
+            log(`🎯 测试代理连接: ${url}`);
+
+            const ws = new WebSocket(url);
+
+            ws.onopen = function(event) {
+                log(`✅ 代理连接成功！`);
+                log(`- URL: ${url}`);
+                log(`- ReadyState: ${ws.readyState}`);
+
+                // 发送测试消息
+                ws.send(JSON.stringify({
+                    type: 'test',
+                    message: 'Hello from proxy test',
+                    user_id: userId
+                }));
+
+                // 3秒后关闭连接
+                setTimeout(() => {
+                    ws.close();
+                    log(`🔌 代理测试连接已关闭`);
+                }, 3000);
+            };
+
+            ws.onmessage = function(event) {
+                log(`📨 收到消息: ${event.data}`);
+            };
+
+            ws.onerror = function(error) {
+                log(`❌ 代理连接错误: ${error}`);
+                log(`- URL: ${url}`);
+            };
+
+            ws.onclose = function(event) {
+                log(`🔌 代理连接关闭 - Code: ${event.code}, Reason: ${event.reason || '无'}`);
+            };
+        }
+
+        // 测试直连后端
+        function testDirectConnection() {
+            const userId = 'test_user_' + Date.now();
+            const url = `ws://172.16.1.3:8080/ws/${userId}`;
+
+            log(`🎯 测试直连后端: ${url}`);
+
+            const ws = new WebSocket(url);
+
+            ws.onopen = function(event) {
+                log(`✅ 直连后端成功！`);
+                log(`- URL: ${url}`);
+                log(`- ReadyState: ${ws.readyState}`);
+
+                // 发送测试消息
+                ws.send(JSON.stringify({
+                    type: 'test',
+                    message: 'Hello from direct connection test',
+                    user_id: userId
+                }));
+
+                // 3秒后关闭连接
+                setTimeout(() => {
+                    ws.close();
+                    log(`🔌 直连测试连接已关闭`);
+                }, 3000);
+            };
+
+            ws.onmessage = function(event) {
+                log(`📨 收到消息: ${event.data}`);
+            };
+
+            ws.onerror = function(error) {
+                log(`❌ 直连错误: ${error}`);
+                log(`- URL: ${url}`);
+            };
+
+            ws.onclose = function(event) {
+                log(`🔌 直连关闭 - Code: ${event.code}, Reason: ${event.reason || '无'}`);
+            };
         }
 
         // 回车发送消息

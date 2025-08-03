@@ -88,15 +88,19 @@ export class WebSocketService {
         this.setConnectionStatus('connecting');
         
         // 构建WebSocket URL
-        const url = new URL(this.options.url);
-        if (this.options.userId) {
-          url.searchParams.set('userId', this.options.userId);
-        }
-        if (this.options.sessionId) {
-          url.searchParams.set('sessionId', this.options.sessionId);
+        // 注意：后端期望路径参数格式 /ws/{user_id}，而不是查询参数
+        let wsUrl = this.options.url;
+
+        // 如果 URL 已经包含了 user_id 路径参数，直接使用
+        // 否则，可以添加查询参数作为备选（但后端应该支持路径参数）
+        if (this.options.sessionId && !wsUrl.includes('conversation_id')) {
+          const url = new URL(wsUrl);
+          url.searchParams.set('conversation_id', this.options.sessionId);
+          wsUrl = url.toString();
         }
 
-        this.ws = new WebSocket(url.toString(), this.options.protocols);
+        console.log('WebSocketService 连接 URL:', wsUrl);
+        this.ws = new WebSocket(wsUrl, this.options.protocols);
 
         this.ws.onopen = () => {
           console.log('WebSocket连接已建立');
