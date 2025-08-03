@@ -291,3 +291,5 @@ Thumbs.db
 /logs/
 /.kiro/
 .augment/
+/backend/data
+/backend/logs

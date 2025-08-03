@@ -62,16 +62,14 @@ class QdrantManager:
             if not self.client:
                 return {"healthy": False, "message": "客户端未初始化"}
             
-            # 检查Qdrant服务状态
-            health = self.client.get_cluster_info()
+            # 使用简单的集合列表来检查服务状态
+            collections = self.client.get_collections()
             
             return {
                 "healthy": True,
                 "message": "Qdrant服务正常",
                 "details": {
-                    "status": health.status,
-                    "peer_count": health.peer_count,
-                    "pending_operations": health.pending_operations,
+                    "collections_count": len(collections.collections),
                     "host": settings.QDRANT_HOST,
                     "port": settings.QDRANT_PORT
                 }

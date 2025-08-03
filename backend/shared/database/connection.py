@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 import logging
 
-from sqlalchemy import create_engine, pool
+from sqlalchemy import create_engine, pool, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy.engine import Engine
@@ -59,7 +59,6 @@ class Database:
             # 创建异步引擎
             self.async_engine = create_async_engine(
                 async_database_url,
-                poolclass=pool.QueuePool,
                 pool_size=20,
                 max_overflow=30,
                 pool_pre_ping=True,
@@ -131,7 +130,7 @@ class Database:
         """测试数据库连接"""
         try:
             async with self.get_async_session() as session:
-                result = await session.execute("SELECT 1")
+                result = await session.execute(text("SELECT 1"))
                 return result.scalar() == 1
         except Exception as e:
             logger.error(f"数据库连接测试失败: {e}")

@@ -62,16 +62,23 @@ class Settings(BaseSettings):
     
     # ==================== 数据库配置 ====================
     DATABASE_URL: str = Field(
-        default="mysql+aiomysql://travel_user:travel_pass@localhost:3306/travel_db",
+        default="mysql+aiomysql://ai_travel_user:ai_travel_pass@localhost:3306/ai_travel_db",
         description="数据库连接URL"
     )
     DATABASE_HOST: str = Field(default="localhost", description="数据库主机")
     DATABASE_PORT: int = Field(default=3306, description="数据库端口")
-    DATABASE_NAME: str = Field(default="travel_db", description="数据库名称")
-    DATABASE_USER: str = Field(default="travel_user", description="数据库用户")
-    DATABASE_PASSWORD: str = Field(default="travel_pass", description="数据库密码")
+    DATABASE_NAME: str = Field(default="ai_travel_db", description="数据库名称")
+    DATABASE_USER: str = Field(default="root", description="数据库用户")
+    DATABASE_PASSWORD: str = Field(default="ai_travel_root", description="数据库密码")
     DATABASE_POOL_SIZE: int = Field(default=20, description="连接池大小")
     DATABASE_MAX_OVERFLOW: int = Field(default=30, description="连接池最大溢出")
+    
+    # MySQL配置别名（向后兼容）
+    MYSQL_HOST: str = Field(default="localhost", description="MySQL主机")
+    MYSQL_PORT: int = Field(default=3306, description="MySQL端口") 
+    MYSQL_DATABASE: str = Field(default="ai_travel_db", description="MySQL数据库名")
+    MYSQL_USER: str = Field(default="root", description="MySQL用户")
+    MYSQL_PASSWORD: str = Field(default="ai_travel_root", description="MySQL密码")
     
     # ==================== 缓存配置 ====================
     REDIS_URL: str = Field(default="redis://localhost:6379", description="Redis连接URL")
@@ -100,6 +107,9 @@ class Settings(BaseSettings):
     
     # ==================== 向量数据库配置 ====================
     QDRANT_URL: str = Field(default="http://localhost:6333", description="Qdrant URL")
+    QDRANT_HOST: str = Field(default="localhost", description="Qdrant主机")
+    QDRANT_PORT: int = Field(default=6333, description="Qdrant HTTP端口")
+    QDRANT_GRPC_PORT: int = Field(default=6334, description="Qdrant gRPC端口")
     QDRANT_API_KEY: Optional[str] = Field(default=None, description="Qdrant API密钥")
     QDRANT_COLLECTION_NAME: str = Field(default="travel_knowledge", description="Qdrant集合名称")
     QDRANT_VECTOR_SIZE: int = Field(default=384, description="向量维度")

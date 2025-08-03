@@ -23,7 +23,7 @@
 ### 自动初始化（推荐）
 ```bash
 # 确保服务已启动
-cd /path/to/ai-travel-planner
+cd ai-travel-planner
 
 # 运行自动初始化脚本
 python backend/scripts/init_system.py
@@ -41,6 +41,9 @@ python backend/scripts/init_system.py
 ```bash
 # 进入MySQL容器
 docker compose -f deployment/docker/docker-compose.dev.yml exec mysql mysql -u root -p
+
+# 输入密码
+ai_travel_root
 
 # 或使用客户端连接
 mysql -h localhost -P 3306 -u ai_travel_user -p ai_travel_db

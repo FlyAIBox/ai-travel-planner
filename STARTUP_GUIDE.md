@@ -84,7 +84,7 @@ HEWEATHER_API_KEY=your_weather_api_key
 ### 开发环境一键启动
 ```bash
 # 进入项目根目录
-cd /path/to/ai-travel-planner
+cd ai-travel-planner
 
 # 使用启动脚本
 chmod +x backend/scripts/start_system.sh
@@ -113,13 +113,11 @@ mkdir -p logs/{api,chat,agent,rag,user,nginx}
 
 ### 第二步：启动基础服务
 ```bash
-cd deployment/docker
-
 # 启动数据库和缓存服务
-docker compose -f docker-compose.dev.yml up -d redis mysql qdrant
+docker compose -f deployment/docker/docker-compose.dev.yml up -d redis mysql qdrant
 
 # 等待服务就绪（约30-60秒）
-docker compose -f docker-compose.dev.yml logs -f mysql
+docker compose -f deployment/docker/docker-compose.dev.yml logs -f mysql
 ```
 
 ### 第三步：启动应用服务

@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 项目配置
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DOCKER_COMPOSE_FILE="$PROJECT_ROOT/deployment/docker/docker-compose.dev.yml"
 ENV_FILE="$PROJECT_ROOT/.env"
 
@@ -112,7 +112,7 @@ setup_environment() {
 # AI Travel Planner 环境配置
 
 # 数据库配置
-MYSQL_ROOT_PASSWORD=ai_travel_root_2024
+MYSQL_ROOT_PASSWORD=ai_travel_root
 MYSQL_DATABASE=ai_travel_db
 MYSQL_USER=ai_travel_user
 MYSQL_PASSWORD=ai_travel_pass

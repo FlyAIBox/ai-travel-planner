@@ -246,7 +246,7 @@ class CollectionManager:
                 # 其他集合使用中等阈值
                 indexing_threshold = 10000
             
-            await self.qdrant_manager.client.update_collection(
+            self.qdrant_manager.client.update_collection(
                 collection_name=collection_name,
                 optimizer_config=OptimizersConfigDiff(
                     indexing_threshold=indexing_threshold,

@@ -31,21 +31,24 @@ settings = get_settings()
 async def init_database():
     """初始化数据库"""
     logger.info("🗄️ 初始化MySQL数据库...")
-    
+
     try:
         # 获取数据库连接
         database = await get_database()
-        
+
         # 测试连接
         if not await database.test_connection():
             logger.error("❌ 数据库连接失败")
+            logger.error("请确保MySQL服务已启动并且配置正确")
+            logger.info("💡 提示：如果使用Docker，请先启动数据库服务：")
+            logger.info("   docker compose -f deployment/docker/docker-compose.dev.yml up -d mysql")
             return False
-        
+
         logger.info("✅ 数据库连接成功")
-        
+
         # 创建所有表
         logger.info("📊 创建数据库表...")
-        
+
         # 导入所有ORM模型以确保表被创建
         import shared.database.models.user  # noqa
         import shared.database.models.travel  # noqa
