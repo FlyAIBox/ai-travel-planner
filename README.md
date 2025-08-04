@@ -252,10 +252,13 @@ HEWEATHER_API_KEY=your_weather_api_key
 
 ##### 步骤5：启动后端服务
 ```bash
+cd backend
+
 # 方法1：使用统一启动脚本（推荐）
 chmod +x scripts/start_backend_services.sh
 ./scripts/start_backend_services.sh
 
+./backend/scripts/start_backend_services.sh
 # 方法2：手动启动各个服务（分别在不同终端）
 cd services/chat-service && python -m uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 cd services/rag-service && python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload

@@ -133,11 +133,12 @@ start_service() {
     local service_name=$1
     local service_port=$2
     local service_path=$3
+    local project_root=$4
 
     log_info "启动 $service_name 服务 (端口: $service_port)..."
 
-    # 使用绝对路径
-    local service_dir="/root/AI-BOX/code/fly/ai-travel-planner/backend/$service_path"
+    # 构建服务目录路径
+    local service_dir="$project_root/backend/$service_path"
 
     if [ ! -d "$service_dir" ]; then
         log_error "服务目录不存在: $service_dir"
@@ -175,12 +176,12 @@ start_service() {
 # 启动所有后端服务
 start_all_services() {
     local project_root=$(get_project_root)
-    
+
     # 创建日志目录
     mkdir -p "$project_root/backend/logs"
-    
+
     log_info "🚀 启动所有后端服务..."
-    
+
     # 定义服务列表 (服务名 端口 路径)
     declare -a services=(
         "rag-service 8001 services/rag-service"
@@ -191,11 +192,11 @@ start_all_services() {
         "chat-service 8080 services/chat-service"
         "api-gateway 8006 services/api-gateway"
     )
-    
-    # 启动各个服务
+
+    # 启动各个服务，传递项目根目录
     for service_info in "${services[@]}"; do
         read -r service_name service_port service_path <<< "$service_info"
-        start_service "$service_name" "$service_port" "$service_path"
+        start_service "$service_name" "$service_port" "$service_path" "$project_root"
         sleep 2
     done
 }
