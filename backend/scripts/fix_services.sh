@@ -86,6 +86,10 @@ start_service() {
 log_info "🚀 启动所有后端服务..."
 
 # 按顺序启动服务
+start_service "rag-service" 8001
+sleep 2
+start_service "chat-service" 8080
+sleep 2
 start_service "user-service" 8003
 sleep 2
 start_service "planning-service" 8004
@@ -102,6 +106,8 @@ sleep 5
 log_info "检查服务健康状态..."
 
 declare -A health_endpoints
+health_endpoints["RAG服务"]="http://localhost:8001/api/v1/health"
+health_endpoints["Chat服务"]="http://localhost:8080/api/v1/health"
 health_endpoints["User服务"]="http://localhost:8003/api/v1/health"
 health_endpoints["Planning服务"]="http://localhost:8004/api/v1/health"
 health_endpoints["Integration服务"]="http://localhost:8005/api/v1/health"

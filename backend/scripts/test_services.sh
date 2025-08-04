@@ -13,6 +13,8 @@ echo -e "${BLUE}=== 测试所有服务健康状态 ===${NC}"
 
 # 定义服务列表
 declare -A services
+services["RAG服务"]="http://localhost:8001/api/v1/health"
+services["Chat服务"]="http://localhost:8080/api/v1/health"
 services["User服务"]="http://localhost:8003/api/v1/health"
 services["Planning服务"]="http://localhost:8004/api/v1/health"
 services["Integration服务"]="http://localhost:8005/api/v1/health"
@@ -46,7 +48,7 @@ for service_name in "${!services[@]}"; do
 done
 
 echo -e "\n${BLUE}=== 端口监听状态 ===${NC}"
-netstat -tuln | grep -E ":(8003|8004|8005|8006) " | while read line; do
-    port=$(echo "$line" | grep -oE ":(800[3-6])" | cut -d: -f2)
+netstat -tuln | grep -E ":(8001|8080|8003|8004|8005|8006) " | while read line; do
+    port=$(echo "$line" | grep -oE ":(8001|8080|800[3-6])" | cut -d: -f2)
     echo -e "端口 $port: ${GREEN}✅ 监听中${NC}"
 done
