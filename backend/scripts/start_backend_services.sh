@@ -156,6 +156,9 @@ start_service() {
     # 创建日志目录
     mkdir -p logs
 
+    # 设置Python路径以包含backend目录
+    export PYTHONPATH="$project_root/backend:$PYTHONPATH"
+
     # 后台启动服务
     nohup python -m uvicorn main:app --host 0.0.0.0 --port $service_port --reload > "logs/${service_name}.log" 2>&1 &
     local pid=$!

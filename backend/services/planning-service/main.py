@@ -711,7 +711,7 @@ async def get_redis_client():
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
         password=settings.REDIS_PASSWORD,
-        db=settings.REDIS_DB,
+        db=settings.REDIS_DB_CACHE,
         decode_responses=True
     )
 

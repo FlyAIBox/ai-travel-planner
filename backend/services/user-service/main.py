@@ -17,7 +17,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field, EmailStr
-import mysql.connector.aio as mysql
+import aiomysql
 
 from shared.config.settings import get_settings
 from shared.utils.logger import get_logger
@@ -100,12 +100,12 @@ class Database:
     async def connect(self):
         """连接数据库"""
         try:
-            self.pool = await mysql.create_pool(
+            self.pool = await aiomysql.create_pool(
                 host=settings.MYSQL_HOST,
                 port=settings.MYSQL_PORT,
                 user=settings.MYSQL_USER,
                 password=settings.MYSQL_PASSWORD,
-                database=settings.MYSQL_DATABASE,
+                db=settings.MYSQL_DATABASE,
                 minsize=5,
                 maxsize=20
             )
@@ -318,7 +318,7 @@ async def get_redis_client():
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
         password=settings.REDIS_PASSWORD,
-        db=settings.REDIS_DB,
+        db=settings.REDIS_DB_SESSION,
         decode_responses=True
     )
 
@@ -387,8 +387,9 @@ async def init_database():
             )
             """
             
-            await conn.execute(users_table)
-            await conn.execute(preferences_table)
+            async with conn.cursor() as cursor:
+                await cursor.execute(users_table)
+                await cursor.execute(preferences_table)
             await conn.commit()
             
             logger.info("数据库表初始化完成")
@@ -685,7 +686,8 @@ async def health_check():
     try:
         # 检查数据库连接
         async with await db.get_connection() as conn:
-            await conn.execute("SELECT 1")
+            async with conn.cursor() as cursor:
+                await cursor.execute("SELECT 1")
         
         # 检查Redis连接
         redis_client = app.state.redis_client
